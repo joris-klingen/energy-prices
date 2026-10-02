@@ -2,7 +2,7 @@ from datetime import datetime, timedelta, timezone
 
 import duckdb
 
-from energy_prices.entsoe import PricePoint
+from energy_prices.model import PricePoint
 from energy_prices.store import build_duckdb, partition_path, write_points
 
 START = datetime(2026, 9, 9, 22, 0, tzinfo=timezone.utc)
@@ -11,6 +11,7 @@ START = datetime(2026, 9, 9, 22, 0, tzinfo=timezone.utc)
 def _point(price: float, revision: int = 1, hours: int = 0) -> PricePoint:
     start = START + timedelta(hours=hours)
     return PricePoint(
+        source="entsoe",
         bidding_zone="NL",
         eic_code="10YNL----------L",
         mtu_start_utc=start,
@@ -19,7 +20,7 @@ def _point(price: float, revision: int = 1, hours: int = 0) -> PricePoint:
         price_eur_mwh=price,
         currency="EUR",
         unit="MWH",
-        document_mrid="doc",
+        source_reference="doc",
         revision_number=revision,
         retrieved_at_utc=datetime(2026, 9, 10, tzinfo=timezone.utc),
     )

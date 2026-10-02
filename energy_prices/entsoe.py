@@ -9,31 +9,20 @@ from __future__ import annotations
 import logging
 import time
 import xml.etree.ElementTree as ET
-from dataclasses import dataclass, asdict
+from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
 
 import requests
 
 from . import config
+from .model import PricePoint
 
 log = logging.getLogger(__name__)
 
 RESOLUTION_MINUTES = {"PT15M": 15, "PT30M": 30, "PT60M": 60, "P1D": 1440}
 
 
-@dataclass(frozen=True)
-class PricePoint:
-    bidding_zone: str
-    eic_code: str
-    mtu_start_utc: datetime
-    mtu_end_utc: datetime
-    resolution: str
-    price_eur_mwh: float
-    currency: str
-    unit: str
-    document_mrid: str
-    revision_number: int
-    retrieved_at_utc: datetime
+SOURCE = "entsoe"
 
 
 def _local_name(tag: str) -> str:
@@ -110,6 +99,7 @@ def parse_price_document(xml: str, zone: str, retrieved_at: datetime) -> list[Pr
                         break
                     points.append(
                         PricePoint(
+                            source=SOURCE,
                             bidding_zone=zone,
                             eic_code=eic or config.ZONES.get(zone, ""),
                             mtu_start_utc=start,
@@ -118,7 +108,7 @@ def parse_price_document(xml: str, zone: str, retrieved_at: datetime) -> list[Pr
                             price_eur_mwh=price,
                             currency=currency,
                             unit=unit,
-                            document_mrid=document_mrid,
+                            source_reference=document_mrid,
                             revision_number=revision,
                             retrieved_at_utc=retrieved_at,
                         )

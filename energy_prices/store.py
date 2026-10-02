@@ -16,11 +16,12 @@ from pathlib import Path
 import duckdb
 
 from . import config
-from .entsoe import PricePoint
+from .model import PricePoint
 
 log = logging.getLogger(__name__)
 
 COLUMNS = [
+    ("source", "VARCHAR"),
     ("bidding_zone", "VARCHAR"),
     ("eic_code", "VARCHAR"),
     ("mtu_start_utc", "TIMESTAMPTZ"),
@@ -29,15 +30,17 @@ COLUMNS = [
     ("price_eur_mwh", "DOUBLE"),
     ("currency", "VARCHAR"),
     ("unit", "VARCHAR"),
-    ("document_mrid", "VARCHAR"),
+    ("source_reference", "VARCHAR"),
     ("revision_number", "INTEGER"),
     ("retrieved_at_utc", "TIMESTAMPTZ"),
 ]
 COLUMN_NAMES = [name for name, _ in COLUMNS]
 
-# A price point is uniquely identified by zone, delivery interval and resolution;
-# later revisions of the same interval replace earlier ones.
-KEY = ["bidding_zone", "mtu_start_utc", "resolution"]
+# A price point is uniquely identified by source, zone, delivery interval and
+# resolution; later revisions of the same interval replace earlier ones. Keeping the
+# source in the key lets two sources cover the same interval side by side, which is
+# what makes a cross-check possible.
+KEY = ["source", "bidding_zone", "mtu_start_utc", "resolution"]
 
 
 def partition_path(zone: str, month: str, data_dir: Path | None = None) -> Path:
@@ -57,9 +60,9 @@ def _staging_table(con: duckdb.DuckDBPyConnection, points: list[PricePoint]) -> 
         f"INSERT INTO staging VALUES ({placeholders})",
         [
             (
-                p.bidding_zone, p.eic_code, p.mtu_start_utc, p.mtu_end_utc, p.resolution,
-                p.price_eur_mwh, p.currency, p.unit, p.document_mrid, p.revision_number,
-                p.retrieved_at_utc,
+                p.source, p.bidding_zone, p.eic_code, p.mtu_start_utc, p.mtu_end_utc,
+                p.resolution, p.price_eur_mwh, p.currency, p.unit, p.source_reference,
+                p.revision_number, p.retrieved_at_utc,
             )
             for p in points
         ],
@@ -124,7 +127,7 @@ def build_duckdb(db_path: Path | None = None, data_dir: Path | None = None) -> P
             SELECT *,
                    mtu_start_utc AT TIME ZONE 'Europe/Amsterdam' AS mtu_start_local
             FROM read_parquet('{pattern}', union_by_name = true)
-            ORDER BY bidding_zone, mtu_start_utc, resolution
+            ORDER BY source, bidding_zone, mtu_start_utc, resolution
             """
         )
         con.execute(
@@ -148,11 +151,11 @@ def coverage(data_dir: Path | None = None) -> list[tuple]:
             f"""
             -- Cast the timestamps to text: returning TIMESTAMPTZ to Python would
             -- pull in an optional pytz dependency just for this summary.
-            SELECT bidding_zone, resolution, count(*) AS rows,
+            SELECT source, bidding_zone, resolution, count(*) AS rows,
                    strftime(min(mtu_start_utc), '%Y-%m-%d %H:%M') AS first_mtu,
                    strftime(max(mtu_start_utc), '%Y-%m-%d %H:%M') AS last_mtu
             FROM read_parquet('{pattern}', union_by_name = true)
-            GROUP BY 1, 2 ORDER BY 1, 2
+            GROUP BY 1, 2, 3 ORDER BY 1, 2, 3
             """
         ).fetchall()
     except duckdb.IOException:

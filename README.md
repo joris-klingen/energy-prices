@@ -1,7 +1,12 @@
 # energy-prices
 
-Archive of Dutch (NL bidding zone) day-ahead electricity prices, collected from the
-ENTSO-E Transparency Platform into month-partitioned Parquet files.
+Archive of Dutch (NL bidding zone) day-ahead electricity prices in month-partitioned
+Parquet files. The primary source is the **Energy-Charts API** (Fraunhofer ISE, CC BY 4.0,
+no token); the **ENTSO-E Transparency Platform** is available as a second source for
+cross-checking and as a fallback.
+
+Current coverage: **2015-01-05 onwards**, 94,127 hourly points to the EU-wide MTU change
+on 2025-10-01 and 35,232 quarter-hourly points after it.
 
 ## Is there an official archive? Yes.
 
@@ -15,7 +20,13 @@ Transparency Platform** is the official EU archive and it is free.
 | [Energy-Charts](https://api.energy-charts.info/) (Fraunhofer ISE) | Day-ahead prices for 40+ zones, CC BY 4.0 | 2015 → | Free API, no token; convenient fallback |
 | [Nord Pool Data Portal](https://data.nordpoolgroup.com/) | Nordic/Baltic + NL day-ahead | 1992 → | Free viewing; redistribution licensed |
 
-So this repo **backfills the full history in one run** and then tops up daily.
+Both carry the same numbers: under SDAC market coupling there is a single clearing price
+per bidding zone per MTU, and every publisher reports it. Energy-Charts is primary here
+because it needs no token and returns years per request; note that its NL series is
+re-published (its `license_info` credits *Bundesnetzagentur | SMARD.de*), so cite ENTSO-E
+as the origin in anything you publish.
+
+Either way the repo **backfills the full history in one run** and then tops up daily.
 
 ### What does *not* have a free archive
 
@@ -37,8 +48,11 @@ data/day_ahead/zone=NL/YYYY-MM.parquet   # source of truth, one row per market t
 data/energy_prices.duckdb                # derived, git-ignored, rebuilt on demand
 ```
 
-One row per (bidding zone, delivery interval, resolution). Both the hourly and the
-15-minute series are stored where ENTSO-E publishes both; `resolution` distinguishes them.
+One row per (source, bidding zone, delivery interval, resolution). Keeping `source` in the
+key lets both providers cover the same interval side by side, which is what makes a
+cross-check possible — filter on `source = 'energy-charts'` for a single clean series.
+`resolution` is `PT60M` or `PT15M`; Energy-Charts states no resolution, so it is inferred
+from the spacing between timestamps.
 Timestamps are UTC; `build-db` adds `mtu_start_local` in Europe/Amsterdam. Re-published
 revisions replace earlier ones on `(bidding_zone, mtu_start_utc, resolution)`, keeping the
 highest `revision_number`.
@@ -47,17 +61,20 @@ highest `revision_number`.
 
 ```bash
 pip install -r requirements.txt
-export ENTSOE_API_TOKEN=...        # see below
 
-python -m energy_prices check-token                   # verify the token works
-python -m energy_prices backfill                      # 2015-01-01 → tomorrow
+python -m energy_prices backfill                      # 2015 → tomorrow, ~7 minutes
 python -m energy_prices backfill --start 2024-01-01   # a narrower window
 python -m energy_prices daily                         # last 7 days + tomorrow
+
+python -m energy_prices daily --source entsoe         # the second source
+python -m energy_prices check-token                   # verify the ENTSO-E token
 python -m energy_prices build-db                      # rebuild the DuckDB file
 python -m energy_prices coverage                      # rows and date range per series
 ```
 
-## Getting an API token
+## Getting an ENTSO-E API token (optional)
+
+Only needed for `--source entsoe`; the default source needs nothing.
 
 1. Sign in at [transparency.entsoe.eu](https://transparency.entsoe.eu/) and open
    **My Account Settings**.
@@ -101,14 +118,14 @@ con <- dbConnect(duckdb())
 prices <- setDT(dbGetQuery(con, "
   SELECT mtu_start_utc, resolution, price_eur_mwh
   FROM read_parquet('data/day_ahead/*/*.parquet', union_by_name = true)
-  WHERE bidding_zone = 'NL'
+  WHERE bidding_zone = 'NL' AND source = 'energy-charts'
 "))
 ```
 
 ## Automation
 
-`.github/workflows/collect.yml` is **paused**: the schedule is commented out until the
-`ENTSOE_API_TOKEN` secret exists. Uncomment the two `cron` lines to resume. It then runs
+`.github/workflows/collect.yml` is **paused**: the schedule is commented out. Uncomment
+the two `cron` lines to resume — no secret is needed for the default source. It then runs
 at 12:00 and 16:00 UTC, fetches the last seven delivery days plus tomorrow, and commits
 any changed Parquet partitions. Run it with
 `start`/`end` inputs for a manual backfill. Two runs per day give a free retry, and the
@@ -116,6 +133,14 @@ seven-day lookback means a few missed days repair themselves.
 
 ## Licence and attribution
 
-ENTSO-E Transparency Platform data is free to use under its
-[terms of use](https://transparency.entsoe.eu/content/static_content/Static%20content/terms%20and%20conditions/terms%20and%20conditions.html);
-cite ENTSO-E as the source in any publication.
+Energy-Charts data is **CC BY 4.0** and the NL series credits *Bundesnetzagentur |
+SMARD.de*; the API returns that string in every response as `license_info`. ENTSO-E
+Transparency Platform data is free to use under its
+[terms of use](https://transparency.entsoe.eu/content/static_content/Static%20content/terms%20and%20conditions/terms%20and%20conditions.html).
+Credit both the publisher you pulled from and ENTSO-E as the origin of the prices.
+
+## Rate limits
+
+Energy-Charts answers a burst of large requests with `429` and a `Retry-After` header
+(about 28 seconds). The client honours it and pauses 10 seconds between backfill chunks,
+which is why a full backfill takes around seven minutes rather than one.
