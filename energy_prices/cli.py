@@ -7,6 +7,8 @@ import logging
 from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
+import requests
+
 from . import config, store
 from .entsoe import fetch_day_ahead
 
@@ -41,6 +43,40 @@ def collect(zones: list[str], start: date, end: date) -> int:
     return total
 
 
+def check_token() -> int:
+    """Verify the API token with a one-day request and report what came back."""
+    try:
+        token = config.api_token()
+    except RuntimeError as exc:
+        log.error("%s", exc)
+        return 2
+    log.info("token found (%s characters)", len(token))
+
+    yesterday = datetime.now(LOCAL_TZ).date() - timedelta(days=1)
+    try:
+        points = fetch_day_ahead(
+            "NL", _utc_midnight(yesterday), _utc_midnight(yesterday + timedelta(days=1)), token
+        )
+    except RuntimeError as exc:
+        log.error("%s", exc)
+        log.error("the platform knows the account but has not enabled API access for it; "
+                  "email transparency@entsoe.eu with subject 'Restful API access'")
+        return 1
+    except requests.RequestException as exc:
+        log.error("could not reach %s: %s", config.API_URL, exc)
+        return 1
+
+    if not points:
+        log.error("the API answered but returned no prices for %s - unexpected for NL", yesterday)
+        return 1
+
+    log.info("OK: %s price points for NL on %s", len(points), yesterday)
+    for point in points[:3]:
+        log.info("  %s %s %7.2f EUR/MWh", point.mtu_start_utc, point.resolution, point.price_eur_mwh)
+    log.info("the token works. Next: python -m energy_prices backfill")
+    return 0
+
+
 def _summary() -> None:
     for zone, resolution, rows, first, last in store.coverage():
         log.info("coverage %s %s: %s rows, %s .. %s", zone, resolution, rows, first, last)
@@ -48,7 +84,9 @@ def _summary() -> None:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="energy_prices")
-    parser.add_argument("command", choices=["backfill", "daily", "build-db", "coverage"])
+    parser.add_argument(
+        "command", choices=["check-token", "backfill", "daily", "build-db", "coverage"]
+    )
     parser.add_argument("--zones", nargs="*", default=list(config.ZONES))
     parser.add_argument("--start", type=date.fromisoformat, help="first delivery day (backfill)")
     parser.add_argument("--end", type=date.fromisoformat, help="exclusive last delivery day")
@@ -57,6 +95,9 @@ def main(argv: list[str] | None = None) -> int:
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s", datefmt="%H:%M:%S")
     today = datetime.now(LOCAL_TZ).date()
+
+    if args.command == "check-token":
+        return check_token()
 
     if args.command == "backfill":
         start = args.start or ARCHIVE_START

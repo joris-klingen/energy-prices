@@ -4,3 +4,6 @@ __pycache__/
 # Derived from the Parquet partitions by `python -m energy_prices build-db`.
 *.duckdb
 data/**/*.parquet.tmp
+
+# Local secrets
+.env

@@ -49,6 +49,7 @@ highest `revision_number`.
 pip install -r requirements.txt
 export ENTSOE_API_TOKEN=...        # see below
 
+python -m energy_prices check-token                   # verify the token works
 python -m energy_prices backfill                      # 2015-01-01 → tomorrow
 python -m energy_prices backfill --start 2024-01-01   # a narrower window
 python -m energy_prices daily                         # last 7 days + tomorrow
@@ -56,10 +57,39 @@ python -m energy_prices build-db                      # rebuild the DuckDB file
 python -m energy_prices coverage                      # rows and date range per series
 ```
 
-**API token**: register at [transparency.entsoe.eu](https://transparency.entsoe.eu/), then
-email `transparency@entsoe.eu` with subject *Restful API access* and your registered
-address in the body. Store it as the `ENTSOE_API_TOKEN` repository secret for the
-scheduled workflow.
+## Getting an API token
+
+1. Sign in at [transparency.entsoe.eu](https://transparency.entsoe.eu/) and open
+   **My Account Settings**.
+2. If a button to generate a *Web Api Security Token* is there, click it — that is the
+   token. If it is not, API access has not been enabled for the account yet: email
+   `transparency@entsoe.eu` with subject **Restful API access** and the account's email
+   address in the body. The helpdesk aims to answer within three working days, after
+   which the button appears.
+3. Put the token where the code can find it, either way:
+
+   ```bash
+   echo 'ENTSOE_API_TOKEN=<token>' >> .env   # git-ignored, for local runs
+   export ENTSOE_API_TOKEN=<token>           # or just the environment
+   ```
+
+4. Verify it, which costs one small request:
+
+   ```bash
+   python -m energy_prices check-token
+   ```
+
+5. For the scheduled workflow, add the same value as the repository secret
+   `ENTSOE_API_TOKEN` (*Settings → Secrets and variables → Actions → New repository
+   secret*), or from a machine with the GitHub CLI:
+
+   ```bash
+   gh secret set ENTSOE_API_TOKEN --repo joris-klingen/energy-prices
+   ```
+
+The token goes out as the `securityToken` query parameter on every request to
+`https://web-api.tp.entsoe.eu/api`. Treat it as a password: it is tied to the account,
+and the `.env` file is git-ignored for that reason.
 
 ## Reading the data
 

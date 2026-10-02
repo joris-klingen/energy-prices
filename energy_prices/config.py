@@ -30,11 +30,26 @@ DATA_DIR = Path(os.environ.get("ENERGY_PRICES_DATA_DIR", "data"))
 DUCKDB_PATH = Path(os.environ.get("ENERGY_PRICES_DUCKDB", DATA_DIR / "energy_prices.duckdb"))
 
 
+def _token_from_dotenv() -> str:
+    """Read ENTSOE_API_TOKEN from a local, git-ignored .env so interactive runs do
+    not need the variable exported. The scheduled job uses the environment instead."""
+    dotenv = Path(".env")
+    if not dotenv.is_file():
+        return ""
+    for line in dotenv.read_text().splitlines():
+        key, _, value = line.partition("=")
+        if key.strip() == "ENTSOE_API_TOKEN":
+            return value.strip().strip("\"'")
+    return ""
+
+
 def api_token() -> str:
-    token = os.environ.get("ENTSOE_API_TOKEN", "").strip()
+    token = os.environ.get("ENTSOE_API_TOKEN", "").strip() or _token_from_dotenv()
     if not token:
         raise RuntimeError(
-            "ENTSOE_API_TOKEN is not set. Register at https://transparency.entsoe.eu "
-            "and email transparency@entsoe.eu with subject 'Restful API access'."
+            "ENTSOE_API_TOKEN is not set. Export it, or put it in a .env file. "
+            "Generate one at https://transparency.entsoe.eu -> My Account Settings; "
+            "if there is no token button yet, email transparency@entsoe.eu with "
+            "subject 'Restful API access' and your account address in the body."
         )
     return token
