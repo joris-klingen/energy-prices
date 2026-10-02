@@ -1,12 +1,12 @@
 name: collect day-ahead prices
 
 on:
-  # PAUSED on request. Uncomment the two cron lines to resume: 12:00 and 16:00 UTC
-  # run after the ~12:45 CET SDAC publication in both CET and CEST, the second pass
-  # catching late publication or corrections. The default source needs no secret.
-  # schedule:
-  #   - cron: "0 12 * * *"
-  #   - cron: "0 16 * * *"
+  schedule:
+    # 12:00 and 16:00 UTC: after the ~12:45 CET SDAC publication in both CET and
+    # CEST, the second pass catching late publication or corrections. The default
+    # source needs no secret.
+    - cron: "0 12 * * *"
+    - cron: "0 16 * * *"
   workflow_dispatch:
     inputs:
       source:
