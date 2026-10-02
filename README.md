@@ -107,8 +107,10 @@ prices <- setDT(dbGetQuery(con, "
 
 ## Automation
 
-`.github/workflows/collect.yml` runs at 12:00 and 16:00 UTC, fetches the last seven
-delivery days plus tomorrow, and commits any changed Parquet partitions. Run it with
+`.github/workflows/collect.yml` is **paused**: the schedule is commented out until the
+`ENTSOE_API_TOKEN` secret exists. Uncomment the two `cron` lines to resume. It then runs
+at 12:00 and 16:00 UTC, fetches the last seven delivery days plus tomorrow, and commits
+any changed Parquet partitions. Run it with
 `start`/`end` inputs for a manual backfill. Two runs per day give a free retry, and the
 seven-day lookback means a few missed days repair themselves.
 
