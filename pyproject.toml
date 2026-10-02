@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "energy-prices"
+version = "0.1.0"
+description = "Archive of Dutch day-ahead electricity prices in month-partitioned Parquet"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "polars>=1.0",
+    "duckdb>=1.0",
+    "requests>=2.31",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+energy-prices = "energy_prices.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["energy_prices*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

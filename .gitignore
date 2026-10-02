@@ -1,0 +1,14 @@
+__pycache__/
+*.pyc
+.venv/
+# Derived from the Parquet partitions by `python -m energy_prices build-db`.
+*.duckdb
+data/**/*.parquet.tmp
+
+# Local secrets
+.env
+
+# Editable-install build metadata
+*.egg-info/
+build/
+dist/
