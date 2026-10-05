@@ -157,6 +157,24 @@ The parsers are pure functions over a payload, so the suites cover the awkward c
 directly: mixed hourly/quarter-hourly spacing across the MTU change, a trailing point with
 no successor, holes in the series, revision precedence, and month-boundary partitioning.
 
+## When a source is down
+
+Upstream outages happen — Energy-Charts was unreachable for over a day in October 2026 —
+and a daily collector should not cry wolf over them. So the two cases are kept apart:
+
+- **The source is unavailable** (connection failure, 5xx, or rate limiting that outlasts
+  the retries) — logged as a warning, and `daily` falls back to the other source. If that
+  does not work either the run still exits 0, because the seven-day lookback repairs the
+  gap by itself on the next successful run.
+- **The archive has actually fallen behind** — the newest stored delivery day is more than
+  two days behind today — the run exits non-zero. A healthy archive reaches *tomorrow*, so
+  this leaves roughly three days for an outage to clear before anyone is told.
+
+A failing run therefore means the data is genuinely going stale, not that Fraunhofer had a
+bad afternoon. A bad request or a rejected credential is nobody's outage and still fails
+immediately. Fallback is chosen with `--fallback` (`auto`, `none`, or a source name);
+`backfill` has no such tolerance, since an incomplete backfill is a failed backfill.
+
 ## Rate limits
 
 Energy-Charts answers a burst of large requests with `429` and a `Retry-After` header

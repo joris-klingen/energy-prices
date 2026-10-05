@@ -15,6 +15,7 @@ import polars as pl
 import requests
 
 from .. import config
+from ..errors import SourceUnavailable
 from ..schema import SCHEMA, empty_frame, validate
 
 log = logging.getLogger(__name__)
@@ -35,6 +36,9 @@ CHUNK_DAYS = 365
 
 # Day-ahead prices have been published since the start of the SDAC history.
 ARCHIVE_START = date(2015, 1, 1)
+
+# Backoff between retries of a failing request: 4s, 8s, 16s over four attempts.
+BACKOFF_SECONDS = 4
 
 
 def _local_name(tag: str) -> str:
@@ -157,7 +161,15 @@ def fetch_day_ahead(
     session = session or requests.Session()
 
     for attempt in range(max_retries):
-        response = session.get(API_URL, params=params, timeout=60)
+        try:
+            response = session.get(API_URL, params=params, timeout=60)
+        except requests.RequestException as exc:
+            if attempt == max_retries - 1:
+                raise SourceUnavailable(f"{API_URL} unreachable: {exc}") from exc
+            log.warning("%s, retrying", exc.__class__.__name__)
+            time.sleep(BACKOFF_SECONDS * 2**attempt)
+            continue
+
         if response.status_code == 200:
             return parse_price_document(response.text, zone, datetime.now(timezone.utc))
         if response.status_code == 401:
@@ -165,10 +177,15 @@ def fetch_day_ahead(
         if response.status_code == 400 and "No matching data" in response.text:
             log.info("no matching data for %s %s..%s", zone, start, end)
             return empty_frame()
-        if response.status_code in (429, 500, 502, 503, 504) and attempt < max_retries - 1:
-            wait = 2 ** (attempt + 1)
+        if response.status_code in (429, 500, 502, 503, 504):
+            if attempt == max_retries - 1:
+                raise SourceUnavailable(
+                    f"{API_URL} returned {response.status_code} on {max_retries} tries"
+                )
+            wait = BACKOFF_SECONDS * 2**attempt
             log.warning("HTTP %s, retrying in %ss", response.status_code, wait)
             time.sleep(wait)
             continue
+        # Anything else is a bad request on our side, so let it fail loudly.
         response.raise_for_status()
     return empty_frame()

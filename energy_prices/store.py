@@ -9,7 +9,9 @@ from __future__ import annotations
 
 import logging
 import os
+from datetime import date
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import duckdb
 import polars as pl
@@ -18,6 +20,8 @@ from . import config
 from .schema import KEY, validate
 
 log = logging.getLogger(__name__)
+
+LOCAL_TZ = ZoneInfo("Europe/Amsterdam")
 
 
 def partition_path(zone: str, month: str, data_dir: Path | None = None) -> Path:
@@ -114,3 +118,21 @@ def coverage(data_dir: Path | None = None) -> list[tuple]:
         )
     except (FileNotFoundError, pl.exceptions.ComputeError):
         return []
+
+
+def newest_delivery_day(data_dir: Path | None = None) -> date | None:
+    """The local delivery day of the most recent stored price, or None if empty.
+
+    This is what says whether the archive is keeping up: after a healthy run it is
+    tomorrow, because D+1 prices are published around 12:45 CET.
+    """
+    try:
+        newest = (
+            pl.scan_parquet(parquet_glob(data_dir))
+            .select(pl.max("mtu_start_utc"))
+            .collect()
+            .item()
+        )
+    except (FileNotFoundError, pl.exceptions.ComputeError):
+        return None
+    return None if newest is None else newest.astimezone(LOCAL_TZ).date()

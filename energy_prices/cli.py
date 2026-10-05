@@ -12,10 +12,16 @@ import polars as pl
 import requests
 
 from . import config, store
+from .errors import SourceUnavailable
 from .sources import DEFAULT, SOURCES, entsoe
 
 log = logging.getLogger("energy_prices")
 LOCAL_TZ = ZoneInfo("Europe/Amsterdam")
+
+# How far the archive may fall behind before a run is treated as a real problem.
+# A healthy archive reaches tomorrow, so this leaves roughly three days of slack for
+# an upstream outage to clear on its own before anyone needs to be told.
+STALE_AFTER_DAYS = 2
 
 
 def _utc_midnight(day: date) -> datetime:
@@ -31,8 +37,13 @@ def _fetch(source: str, zone: str, start: date, end: date) -> pl.DataFrame:
     return SOURCES[source].fetch_day_ahead(zone, start, end)
 
 
-def collect(source: str, zones: list[str], start: date, end: date) -> int:
-    """Fetch and store prices for delivery days [start, end)."""
+def collect(source: str, zones: list[str], start: date, end: date) -> tuple[int, bool]:
+    """Fetch and store prices for delivery days [start, end).
+
+    Returns the rows stored and whether the source went unavailable part-way. An
+    unavailable source ends the attempt for that source rather than hammering a
+    service that has already said it has nothing to give.
+    """
     chunk_days = SOURCES[source].CHUNK_DAYS
     pause = getattr(SOURCES[source], "PAUSE_SECONDS", 0.0)
     total = 0
@@ -47,14 +58,19 @@ def collect(source: str, zones: list[str], start: date, end: date) -> int:
             first_request = False
 
             log.info("fetching %s %s %s..%s", source, zone, cursor, chunk_end)
-            frame = _fetch(source, zone, cursor, chunk_end)
+            try:
+                frame = _fetch(source, zone, cursor, chunk_end)
+            except SourceUnavailable as exc:
+                log.warning("  %s is unavailable: %s", source, exc)
+                return total, True
+
             log.info("  %s price points", frame.height)
             if not frame.is_empty():
                 for path, rows in store.write_frame(frame).items():
                     log.info("  %s -> %s rows", path, rows)
                 total += frame.height
             cursor = chunk_end
-    return total
+    return total, False
 
 
 def check_token() -> int:
@@ -97,12 +113,73 @@ def _summary() -> None:
         log.info("coverage %s %s %s: %s rows, %s .. %s", source, zone, resolution, rows, first, last)
 
 
+def _resolve_fallback(source: str, choice: str) -> str | None:
+    """"auto" means the other source; "none" disables falling back."""
+    if choice == "none":
+        return None
+    if choice != "auto":
+        return None if choice == source else choice
+    others = [name for name in sorted(SOURCES) if name != source]
+    return others[0] if others else None
+
+
+def collect_with_fallback(
+    source: str, fallback: str | None, zones: list[str], start: date, end: date
+) -> tuple[int, bool]:
+    """Collect from `source`, and if it is unavailable try `fallback` instead."""
+    rows, degraded = collect(source, zones, start, end)
+    if not degraded or fallback is None:
+        return rows, degraded
+
+    log.info("falling back to %s", fallback)
+    try:
+        extra, still_degraded = collect(fallback, zones, start, end)
+    except RuntimeError as exc:
+        # Typically the fallback has no credential configured.
+        log.warning("  fallback %s unusable: %s", fallback, exc)
+        return rows, True
+    return rows + extra, still_degraded
+
+
+def report_staleness(today: date) -> int:
+    """Decide whether an incomplete run is worth failing over.
+
+    An upstream outage is not our problem and the daily lookback repairs the gap by
+    itself, so it only earns a warning. An archive that has actually fallen behind
+    does need attention, and that is what the non-zero exit is reserved for.
+    """
+    newest = store.newest_delivery_day()
+    if newest is None:
+        log.error("the archive is empty and the source is unavailable")
+        return 1
+
+    behind = (today - newest).days
+    if behind > STALE_AFTER_DAYS:
+        log.error(
+            "archive is stale: newest delivery day is %s, %s days behind today - "
+            "the source has been unavailable too long to shrug off",
+            newest, behind,
+        )
+        return 1
+
+    log.warning(
+        "source unavailable, but the archive is current through %s; the next run's "
+        "%s-day lookback will fill the gap",
+        newest, config.LOOKBACK_DAYS,
+    )
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="energy-prices")
     parser.add_argument(
         "command", choices=["check-token", "backfill", "daily", "build-db", "coverage"]
     )
     parser.add_argument("--source", choices=sorted(SOURCES), default=DEFAULT)
+    parser.add_argument(
+        "--fallback", choices=["auto", "none", *sorted(SOURCES)], default="auto",
+        help="source to try when the primary is unavailable (default: the other one)",
+    )
     parser.add_argument("--zones", nargs="*", default=list(config.ZONES))
     parser.add_argument("--start", type=date.fromisoformat, help="first delivery day (backfill)")
     parser.add_argument("--end", type=date.fromisoformat, help="exclusive last delivery day")
@@ -114,19 +191,28 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "check-token":
         return check_token()
-
-    if args.command == "backfill":
-        start = args.start or SOURCES[args.source].ARCHIVE_START
-        collect(args.source, args.zones, start, args.end or today + timedelta(days=2))
-    elif args.command == "daily":
-        # Re-fetch a short window so late corrections are picked up, and reach into
-        # tomorrow because D+1 prices are published around 12:45 CET.
-        start = args.start or today - timedelta(days=args.lookback)
-        collect(args.source, args.zones, start, args.end or today + timedelta(days=2))
-    elif args.command == "coverage":
+    if args.command == "coverage":
         _summary()
         return 0
 
+    degraded = False
+    if args.command in ("backfill", "daily"):
+        fallback = _resolve_fallback(args.source, args.fallback)
+        if args.command == "backfill":
+            start = args.start or SOURCES[args.source].ARCHIVE_START
+        else:
+            # Re-fetch a short window so late corrections are picked up, and reach into
+            # tomorrow because D+1 prices are published around 12:45 CET.
+            start = args.start or today - timedelta(days=args.lookback)
+        end = args.end or today + timedelta(days=2)
+        _, degraded = collect_with_fallback(args.source, fallback, args.zones, start, end)
+
     log.info("building duckdb at %s", store.build_duckdb())
     _summary()
+
+    if degraded:
+        if args.command == "backfill":
+            log.error("backfill incomplete: the source went unavailable")
+            return 1
+        return report_staleness(today)
     return 0

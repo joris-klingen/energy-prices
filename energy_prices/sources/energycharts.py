@@ -16,6 +16,7 @@ import polars as pl
 import requests
 
 from .. import config
+from ..errors import SourceUnavailable
 from ..schema import empty_frame, validate
 
 log = logging.getLogger(__name__)
@@ -27,6 +28,10 @@ API_URL = "https://api.energy-charts.info/price"
 # One pause between requests keeps a backfill under the limit in the first place.
 PAUSE_SECONDS = 10.0
 DEFAULT_RETRY_AFTER = 30
+
+# Backoff between retries of a failing request: 4s, 8s, 16s over the default four
+# attempts. Long enough to ride out a blip, short enough not to stall a run.
+BACKOFF_SECONDS = 4
 
 # Five years comes back in a single response, so chunk generously.
 CHUNK_DAYS = 3 * 365
@@ -118,9 +123,9 @@ def fetch_day_ahead(
             response = session.get(API_URL, params=params, timeout=180)
         except requests.RequestException as exc:
             if attempt == max_retries - 1:
-                raise
+                raise SourceUnavailable(f"{API_URL} unreachable: {exc}") from exc
             log.warning("%s, retrying", exc.__class__.__name__)
-            time.sleep(2 ** (attempt + 1))
+            time.sleep(BACKOFF_SECONDS * 2**attempt)
             continue
 
         if response.status_code == 200:
@@ -128,13 +133,21 @@ def fetch_day_ahead(
         if response.status_code == 404:
             log.info("no data for %s %s..%s", zone, start, end)
             return empty_frame()
-        if response.status_code == 429 and attempt < max_retries - 1:
+        if response.status_code == 429:
+            if attempt == max_retries - 1:
+                raise SourceUnavailable(f"{API_URL} still rate limiting after {max_retries} tries")
             wait = int(response.headers.get("retry-after", DEFAULT_RETRY_AFTER)) + 1
             log.warning("rate limited, waiting %ss", wait)
             time.sleep(wait)
             continue
-        if response.status_code >= 500 and attempt < max_retries - 1:
-            time.sleep(2 ** (attempt + 1))
+        if response.status_code >= 500:
+            if attempt == max_retries - 1:
+                raise SourceUnavailable(
+                    f"{API_URL} returned {response.status_code} on {max_retries} tries"
+                )
+            log.warning("HTTP %s, retrying", response.status_code)
+            time.sleep(BACKOFF_SECONDS * 2**attempt)
             continue
+        # A 4xx is a bad request on our side, so let it fail loudly.
         response.raise_for_status()
     return empty_frame()
