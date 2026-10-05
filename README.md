@@ -106,16 +106,20 @@ Only needed for `--source entsoe`; the default source needs nothing.
    ```
 
 5. For the scheduled workflow, add the same value as the repository secret
-   `ENTSOE_API_TOKEN` (*Settings → Secrets and variables → Actions → New repository
+   `ENTSOE_TOKEN` (*Settings → Secrets and variables → Actions → New repository
    secret*), or from a machine with the GitHub CLI:
 
    ```bash
-   gh secret set ENTSOE_API_TOKEN --repo joris-klingen/energy-prices
+   gh secret set ENTSOE_TOKEN --repo joris-klingen/energy-prices
    ```
 
 The token goes out as the `securityToken` query parameter on every request to
 `https://web-api.tp.entsoe.eu/api`. Treat it as a password: it is tied to the account,
 and the `.env` file is git-ignored for that reason.
+
+Be aware that ENTSO-E answers an invalid or not-yet-enabled token with an opaque
+HTTP 500 — the same response a genuine outage gives — so `check-token` reports both
+possibilities rather than pretending to know which it is.
 
 ## Reading the data
 

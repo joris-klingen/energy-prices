@@ -43,7 +43,7 @@ jobs:
 
       - name: Collect
         env:
-          ENTSOE_API_TOKEN: ${{ secrets.ENTSOE_API_TOKEN }}
+          ENTSOE_API_TOKEN: ${{ secrets.ENTSOE_TOKEN || secrets.ENTSOE_API_TOKEN }}
         run: |
           SOURCE="${{ inputs.source || 'energy-charts' }}"
           if [ -n "${{ inputs.start }}" ]; then

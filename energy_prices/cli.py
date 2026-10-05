@@ -87,6 +87,16 @@ def check_token() -> int:
         frame = entsoe.fetch_day_ahead(
             "NL", _utc_midnight(yesterday), _utc_midnight(yesterday + timedelta(days=1)), token
         )
+    except SourceUnavailable as exc:
+        log.error("%s", exc)
+        # ENTSO-E answers an invalid or not-yet-enabled token with an opaque HTTP 500,
+        # byte-for-byte the same as a genuine outage, so this cannot be narrowed down
+        # from here. Saying so beats guessing.
+        log.error("a persistent 500 means either the token is not valid yet or the "
+                  "platform is down - ENTSO-E returns the same error for both")
+        log.error("if it is the token: check it against My Account Settings, and that "
+                  "API access was granted (transparency@entsoe.eu, 'Restful API access')")
+        return 1
     except RuntimeError as exc:
         log.error("%s", exc)
         log.error("the platform knows the account but has not enabled API access for it; "
@@ -171,6 +181,19 @@ def report_staleness(today: date) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    try:
+        return _main(argv)
+    except SourceUnavailable as exc:
+        log.error("%s", exc)
+        return 1
+    except RuntimeError as exc:
+        # Misconfiguration, typically a missing credential. One clear line beats a
+        # traceback in a CI log nobody can scroll.
+        log.error("%s", exc)
+        return 1
+
+
+def _main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="energy-prices")
     parser.add_argument(
         "command", choices=["check-token", "backfill", "daily", "build-db", "coverage"]
