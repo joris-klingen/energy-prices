@@ -23,6 +23,12 @@ LOCAL_TZ = ZoneInfo("Europe/Amsterdam")
 # an upstream outage to clear on its own before anyone needs to be told.
 STALE_AFTER_DAYS = 2
 
+# How long the primary source may produce nothing before that is a problem in its own
+# right. The fallback keeps the archive fresh, which would otherwise mask a primary
+# that has quietly stopped working - and ENTSO-E answers a revoked token with the same
+# opaque 500 it returns during an outage, so nothing else would ever notice.
+PRIMARY_STALE_AFTER_DAYS = 3
+
 
 def _utc_midnight(day: date) -> datetime:
     """Start of a Dutch delivery day, expressed in UTC."""
@@ -180,6 +186,25 @@ def report_staleness(today: date) -> int:
     return 0
 
 
+def report_primary_health(source: str, today: date) -> int:
+    """Fail when the primary source has gone quiet for days, fallback or no fallback."""
+    newest = store.newest_delivery_day(source=source)
+    if newest is None:
+        log.error("%s has never produced a row in this archive", source)
+        return 1
+
+    behind = (today - newest).days
+    if behind > PRIMARY_STALE_AFTER_DAYS:
+        log.error(
+            "%s has produced nothing since %s (%s days behind) - the fallback is "
+            "keeping the archive fresh and hiding a broken primary; check the "
+            "credential and the service before trusting this",
+            source, newest, behind,
+        )
+        return 1
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     try:
         return _main(argv)
@@ -233,9 +258,13 @@ def _main(argv: list[str] | None = None) -> int:
     log.info("building duckdb at %s", store.build_duckdb())
     _summary()
 
-    if degraded:
-        if args.command == "backfill":
+    if args.command == "backfill":
+        if degraded:
             log.error("backfill incomplete: the source went unavailable")
             return 1
-        return report_staleness(today)
-    return 0
+        return 0
+
+    # daily: an outage is forgiven while the archive keeps up, but a primary that has
+    # gone quiet for days is reported even when the fallback is covering for it.
+    exit_code = report_staleness(today) if degraded else 0
+    return exit_code or report_primary_health(args.source, today)
