@@ -8,14 +8,16 @@ Parquet, topped up twice a day. Hourly from 2015-01-05, quarter-hourly from the 
 
 | Source | Role | Access |
 | --- | --- | --- |
-| [Energy-Charts](https://api.energy-charts.info/) (Fraunhofer ISE) | primary | free, no token, CC BY 4.0 |
-| [ENTSO-E Transparency Platform](https://transparency.entsoe.eu/) | fallback and cross-check | free REST API, token by request |
+| [ENTSO-E Transparency Platform](https://transparency.entsoe.eu/) | primary | free REST API, token by request |
+| [Energy-Charts](https://api.energy-charts.info/) (Fraunhofer ISE) | fallback and cross-check | free, no token, CC BY 4.0 |
 
 Under SDAC market coupling there is one clearing price per bidding zone per market time
 unit, so both publish the same numbers — on the intervals the archive holds from both,
-they agree exactly. Energy-Charts is primary only because it needs no token and
-returns years of history per request; ENTSO-E is the origin of the prices and the one to
-cite.
+they agree exactly. ENTSO-E is primary because it is the origin of the prices rather
+than a re-publisher — the Energy-Charts NL series arrives third-hand, its `license_info`
+crediting *Bundesnetzagentur | SMARD.de* — and because it states the resolution instead
+of leaving it to be inferred from the spacing between timestamps. Energy-Charts needs no
+credential, so `--source energy-charts` is the route to collect without one.
 
 Day-ahead prices need no slow accumulation — ENTSO-E is the official EU archive back to
 2015, so `backfill` fetches the lot in one run. Intraday *continuous* prices (EPEX
@@ -34,8 +36,9 @@ energy-prices build-db                    # rebuild the DuckDB file
 energy-prices check-token                 # verify the ENTSO-E token
 ```
 
-Options: `--source {energy-charts,entsoe}`, `--fallback {auto,none,<source>}`, `--start`,
-`--end` (exclusive), `--zones`, `--lookback`.
+Options: `--source {entsoe,energy-charts}` (default `entsoe`),
+`--fallback {auto,none,<source>}`, `--start`, `--end` (exclusive), `--zones`,
+`--lookback`.
 
 ## Reading the data
 
@@ -80,15 +83,18 @@ A re-published revision replaces the earlier one, keeping the highest `revision_
 `.github/workflows/collect.yml` runs at 12:17 and 16:47 UTC — deliberately off the hour,
 since GitHub defers scheduled workflows under load and runs on the hour were arriving
 around eight hours late. Each run fetches the last seven delivery days plus tomorrow and
-**commits any changed Parquet directly to `main`**. No secret is needed for the default
-source. It also takes manual `start`/`end` inputs for a backfill.
+**commits any changed Parquet directly to `main`**. It also takes manual `source`,
+`fallback`, `start` and `end` inputs for a backfill.
 
 An upstream outage is not treated as a failure: a connection error, 5xx or rate limiting
 that outlasts the retries makes `daily` warn and fall back to the other source, and the
 run still exits 0, because the seven-day lookback repairs the gap next time. A non-zero
 exit is reserved for the archive genuinely falling behind — newest delivery day more than
-two days back. A bad request or rejected credential still fails immediately. `backfill`
-has no such tolerance; an incomplete backfill is a failed one.
+two days back, or the **primary alone** going quiet for more than three days while the
+fallback keeps the archive fresh — otherwise a fallback doing its job would mask a
+primary that has stopped working, and ENTSO-E answers a revoked token with the same
+opaque 500 it returns during an outage. A bad request or rejected credential still fails
+immediately. `backfill` has no such tolerance; an incomplete backfill is a failed one.
 
 Energy-Charts answers a burst of large requests with `429` and a `Retry-After` of about
 28 seconds, so the client pauses 10 seconds between backfill chunks — which is why a full
@@ -96,7 +102,7 @@ backfill takes about seven minutes rather than one.
 
 ## ENTSO-E token
 
-Only needed for `--source entsoe`. Sign in at
+Needed for the default source. Sign in at
 [transparency.entsoe.eu](https://transparency.entsoe.eu/) → **My Account Settings** and
 generate a *Web Api Security Token*. If there is no button, API access is not enabled yet:
 email `transparency@entsoe.eu`, subject **Restful API access**, with the account address

@@ -11,6 +11,8 @@ SOURCES: dict[str, ModuleType] = {
     entsoe.SOURCE: entsoe,
 }
 
-DEFAULT = energycharts.SOURCE
+# ENTSO-E is the origin of the prices rather than a re-publisher, and it states
+# the resolution instead of leaving it to be inferred from timestamp spacing.
+DEFAULT = entsoe.SOURCE
 
 __all__ = ["SOURCES", "DEFAULT", "energycharts", "entsoe"]

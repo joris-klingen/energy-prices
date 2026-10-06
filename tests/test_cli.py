@@ -187,3 +187,70 @@ def test_daily_exits_zero_when_the_source_is_down_but_the_archive_is_fresh(monke
     recent = (today - timedelta(hours=12)).astimezone(timezone.utc).replace(minute=0, second=0, microsecond=0)
     write_frame(price_frame(85.0, start=recent), tmp_path)
     assert cli.main(["daily"]) == 0
+
+
+# --- a broken primary must not hide behind a working fallback ----------------
+
+def test_primary_health_passes_while_the_primary_is_producing(monkeypatch, tmp_path):
+    from datetime import date
+
+    from energy_prices.store import write_frame
+
+    monkeypatch.setattr(cli.config, "DATA_DIR", tmp_path)
+    write_frame(price_frame(85.0, start=START, source="entsoe"), tmp_path)
+    assert cli.report_primary_health("entsoe", date(2026, 10, 4)) == 0
+
+
+def test_primary_health_fails_when_only_the_fallback_is_producing(monkeypatch, tmp_path):
+    from datetime import date, timedelta
+
+    from energy_prices.store import write_frame
+
+    monkeypatch.setattr(cli.config, "DATA_DIR", tmp_path)
+    # The primary stopped a week ago; the fallback has been covering ever since, so the
+    # archive looks perfectly fresh. That is exactly the case this check exists for.
+    write_frame(price_frame(85.0, start=START, source="entsoe"), tmp_path)
+    write_frame(
+        price_frame(85.0, start=START + timedelta(days=7), source="energy-charts"), tmp_path
+    )
+    assert cli.report_staleness(date(2026, 10, 9)) == 0
+    assert cli.report_primary_health("entsoe", date(2026, 10, 9)) == 1
+
+
+def test_primary_health_fails_when_the_primary_has_never_worked(monkeypatch, tmp_path):
+    from datetime import date
+
+    from energy_prices.store import write_frame
+
+    monkeypatch.setattr(cli.config, "DATA_DIR", tmp_path)
+    write_frame(price_frame(85.0, start=START, source="energy-charts"), tmp_path)
+    assert cli.report_primary_health("entsoe", date(2026, 10, 2)) == 1
+
+
+def test_daily_fails_when_the_fallback_masks_a_dead_primary(monkeypatch, tmp_path):
+    from datetime import datetime, timedelta
+
+    from energy_prices.store import write_frame
+
+    monkeypatch.setattr(cli.config, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(cli.config, "DUCKDB_PATH", tmp_path / "prices.duckdb")
+    monkeypatch.setattr(cli.SOURCES["energy-charts"], "PAUSE_SECONDS", 0.0)
+    monkeypatch.setattr(cli.entsoe, "fetch_day_ahead", _unavailable)
+
+    now = datetime.now(cli.LOCAL_TZ).astimezone(timezone.utc).replace(
+        minute=0, second=0, microsecond=0
+    )
+    # The fallback collects today, so the archive is fresh and report_staleness is happy.
+    monkeypatch.setattr(
+        cli.SOURCES["energy-charts"], "fetch_day_ahead",
+        lambda *a, **k: price_frame(85.0, start=now, source="energy-charts"),
+    )
+    # ENTSO-E's last contribution was long ago.
+    write_frame(price_frame(85.0, start=now - timedelta(days=30), source="entsoe"), tmp_path)
+
+    assert cli.main(["daily", "--source", "entsoe"]) == 1
+
+
+def test_the_default_source_is_entsoe():
+    assert cli.DEFAULT == "entsoe"
+    assert cli._resolve_fallback("entsoe", "auto") == "energy-charts"
