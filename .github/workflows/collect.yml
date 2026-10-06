@@ -2,11 +2,15 @@ name: collect day-ahead prices
 
 on:
   schedule:
-    # 12:00 and 16:00 UTC: after the ~12:45 CET SDAC publication in both CET and
+    # 12:17 and 16:47 UTC: after the ~12:45 CET SDAC publication in both CET and
     # CEST, the second pass catching late publication or corrections. The default
     # source needs no secret.
-    - cron: "0 12 * * *"
-    - cron: "0 16 * * *"
+    #
+    # Deliberately off the hour. GitHub defers scheduled workflows under load and
+    # :00 is the most contended minute on the platform - these runs were landing
+    # eight hours late while on it.
+    - cron: "17 12 * * *"
+    - cron: "47 16 * * *"
   workflow_dispatch:
     inputs:
       source:

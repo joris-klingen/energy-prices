@@ -137,10 +137,12 @@ prices <- setDT(dbGetQuery(con, "
 
 ## Automation
 
-`.github/workflows/collect.yml` runs at 12:00 and 16:00 UTC, fetches the last seven
+`.github/workflows/collect.yml` runs at 12:17 and 16:47 UTC, fetches the last seven
 delivery days plus tomorrow, and commits any changed Parquet partitions. No secret is
 needed for the default source. Run it by hand with `start`/`end` inputs for a backfill. Two runs per day give a free retry, and the
-seven-day lookback means a few missed days repair themselves.
+seven-day lookback means a few missed days repair themselves. The odd minutes are
+deliberate: GitHub defers scheduled workflows under load, and runs on the hour were
+arriving around eight hours late.
 
 ## Licence and attribution
 
