@@ -1,5 +1,6 @@
 from datetime import datetime, timezone
 
+import polars as pl
 import pytest
 import requests
 
@@ -186,7 +187,23 @@ def test_daily_exits_zero_when_the_source_is_down_but_the_archive_is_fresh(monke
     today = datetime.now(cli.LOCAL_TZ)
     recent = (today - timedelta(hours=12)).astimezone(timezone.utc).replace(minute=0, second=0, microsecond=0)
     write_frame(price_frame(85.0, start=recent), tmp_path)
-    assert cli.main(["daily"]) == 0
+    assert cli.main(["daily", "--zones", "NL"]) == 0
+
+
+def test_one_quiet_zone_fails_the_run_even_when_the_others_are_fresh(monkeypatch, tmp_path):
+    from datetime import date, timedelta
+
+    from energy_prices.store import write_frame
+
+    monkeypatch.setattr(cli.config, "DATA_DIR", tmp_path)
+    write_frame(price_frame(85.0, start=START), tmp_path)  # NL, delivery day 2026-10-02
+    stale = price_frame(85.0, start=START - timedelta(days=10)).with_columns(
+        bidding_zone=pl.lit("BE")
+    )
+    write_frame(stale, tmp_path)
+    assert cli.report_staleness(date(2026, 10, 4), ["NL"]) == 0
+    assert cli.report_staleness(date(2026, 10, 4), ["NL", "BE"]) == 1
+    assert cli.report_staleness(date(2026, 10, 4), ["NL", "FR"]) == 1  # never collected
 
 
 # --- a broken primary must not hide behind a working fallback ----------------

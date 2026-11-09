@@ -29,6 +29,9 @@ on:
       end:
         description: "Exclusive last delivery day (YYYY-MM-DD)"
         required: false
+      zones:
+        description: "Space-separated bidding zones (blank = every active zone)"
+        required: false
 
 concurrency:
   group: collect
@@ -56,12 +59,14 @@ jobs:
         run: |
           SOURCE="${{ inputs.source || 'entsoe' }}"
           FALLBACK="${{ inputs.fallback || 'auto' }}"
+          ZONE_ARGS=()
+          if [ -n "${{ inputs.zones }}" ]; then ZONE_ARGS=(--zones ${{ inputs.zones }}); fi
           if [ -n "${{ inputs.start }}" ]; then
-            energy-prices backfill --source "$SOURCE" --fallback "$FALLBACK" \
+            energy-prices backfill --source "$SOURCE" --fallback "$FALLBACK" "${ZONE_ARGS[@]}" \
               --start "${{ inputs.start }}" \
               ${{ inputs.end && format('--end {0}', inputs.end) || '' }}
           else
-            energy-prices daily --source "$SOURCE" --fallback "$FALLBACK"
+            energy-prices daily --source "$SOURCE" --fallback "$FALLBACK" "${ZONE_ARGS[@]}"
           fi
 
       - name: Commit new prices

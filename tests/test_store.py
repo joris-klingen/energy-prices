@@ -1,3 +1,4 @@
+from pathlib import Path
 from datetime import datetime, timedelta, timezone
 
 import polars as pl
@@ -46,7 +47,7 @@ def test_two_sources_can_cover_the_same_interval(tmp_path):
 def test_rows_spanning_a_month_boundary_land_in_separate_partitions(tmp_path):
     frame = price_frame(1.0, 2.0, start=datetime(2026, 9, 30, 23, 0, tzinfo=timezone.utc))
     written = write_frame(frame, tmp_path)
-    assert sorted(p.rsplit("/", 1)[-1] for p in written) == ["2026-09.parquet", "2026-10.parquet"]
+    assert sorted(Path(p).name for p in written) == ["2026-09.parquet", "2026-10.parquet"]
 
 
 def test_an_empty_frame_writes_nothing(tmp_path):

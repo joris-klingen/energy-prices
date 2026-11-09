@@ -121,7 +121,7 @@ def parse_price_document(xml: str, zone: str, retrieved_at: datetime) -> pl.Data
                         {
                             "source": SOURCE,
                             "bidding_zone": zone,
-                            "eic_code": eic or config.ZONES.get(zone, ""),
+                            "eic_code": eic or config.EIC_CODES.get(zone, ""),
                             "mtu_start_utc": start,
                             "mtu_end_utc": start + step,
                             "resolution": resolution,
@@ -148,7 +148,7 @@ def fetch_day_ahead(
 ) -> pl.DataFrame:
     """Fetch day-ahead prices for [start, end) in UTC. Both hourly and 15-minute
     series are kept when ENTSO-E publishes both for the same delivery day."""
-    eic = config.ZONES[zone]
+    eic = config.eic(zone)
     params = {
         "securityToken": token or config.api_token(),
         "documentType": DOCUMENT_TYPE,

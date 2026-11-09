@@ -157,33 +157,41 @@ def collect_with_fallback(
     return rows + extra, still_degraded
 
 
-def report_staleness(today: date) -> int:
+def report_staleness(today: date, zones: list[str] | None = None) -> int:
     """Decide whether an incomplete run is worth failing over.
 
     An upstream outage is not our problem and the daily lookback repairs the gap by
     itself, so it only earns a warning. An archive that has actually fallen behind
-    does need attention, and that is what the non-zero exit is reserved for.
+    does need attention, and that is what the non-zero exit is reserved for. With
+    `zones`, each is judged on its own, so one zone going quiet cannot hide behind the
+    others staying fresh.
     """
-    newest = store.newest_delivery_day()
-    if newest is None:
-        log.error("the archive is empty and the source is unavailable")
-        return 1
+    checks = [None] if not zones else list(zones)
+    exit_code = 0
+    for zone in checks:
+        label = "the archive" if zone is None else zone
+        newest = store.newest_delivery_day(zone=zone)
+        if newest is None:
+            log.error("%s is empty and the source is unavailable", label)
+            exit_code = 1
+            continue
 
-    behind = (today - newest).days
-    if behind > STALE_AFTER_DAYS:
-        log.error(
-            "archive is stale: newest delivery day is %s, %s days behind today - "
-            "the source has been unavailable too long to shrug off",
-            newest, behind,
+        behind = (today - newest).days
+        if behind > STALE_AFTER_DAYS:
+            log.error(
+                "%s is stale: newest delivery day is %s, %s days behind today - "
+                "the source has been unavailable too long to shrug off",
+                label, newest, behind,
+            )
+            exit_code = 1
+            continue
+
+        log.warning(
+            "source unavailable, but %s is current through %s; the next run's "
+            "%s-day lookback will fill the gap",
+            label, newest, config.LOOKBACK_DAYS,
         )
-        return 1
-
-    log.warning(
-        "source unavailable, but the archive is current through %s; the next run's "
-        "%s-day lookback will fill the gap",
-        newest, config.LOOKBACK_DAYS,
-    )
-    return 0
+    return exit_code
 
 
 def report_primary_health(source: str, today: date) -> int:
@@ -228,7 +236,10 @@ def _main(argv: list[str] | None = None) -> int:
         "--fallback", choices=["auto", "none", *sorted(SOURCES)], default="auto",
         help="source to try when the primary is unavailable (default: the other one)",
     )
-    parser.add_argument("--zones", nargs="*", default=list(config.ZONES))
+    parser.add_argument(
+        "--zones", nargs="*", choices=list(config.EIC_CODES), default=list(config.ZONES),
+        metavar="ZONE", help=f"bidding zones (default: {' '.join(config.ZONES)})",
+    )
     parser.add_argument("--start", type=date.fromisoformat, help="first delivery day (backfill)")
     parser.add_argument("--end", type=date.fromisoformat, help="exclusive last delivery day")
     parser.add_argument("--lookback", type=int, default=config.LOOKBACK_DAYS)
@@ -266,5 +277,5 @@ def _main(argv: list[str] | None = None) -> int:
 
     # daily: an outage is forgiven while the archive keeps up, but a primary that has
     # gone quiet for days is reported even when the fallback is covering for it.
-    exit_code = report_staleness(today) if degraded else 0
+    exit_code = report_staleness(today, args.zones) if degraded else 0
     return exit_code or report_primary_health(args.source, today)

@@ -121,17 +121,20 @@ def coverage(data_dir: Path | None = None) -> list[tuple]:
 
 
 def newest_delivery_day(
-    data_dir: Path | None = None, source: str | None = None
+    data_dir: Path | None = None, source: str | None = None, zone: str | None = None
 ) -> date | None:
     """The local delivery day of the most recent stored price, or None if empty.
 
     This is what says whether the archive is keeping up: after a healthy run it is
     tomorrow, because D+1 prices are published around 12:45 CET. Narrow it to one
-    `source` to ask the same question of a single provider.
+    `source` to ask the same question of a single provider, or one `zone` to ask it of a
+    single bidding zone.
     """
     frame = pl.scan_parquet(parquet_glob(data_dir))
     if source is not None:
         frame = frame.filter(pl.col("source") == source)
+    if zone is not None:
+        frame = frame.filter(pl.col("bidding_zone") == zone)
     try:
         newest = frame.select(pl.max("mtu_start_utc")).collect().item()
     except (FileNotFoundError, pl.exceptions.ComputeError):

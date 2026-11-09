@@ -38,7 +38,8 @@ CHUNK_DAYS = 3 * 365
 
 RESOLUTION_BY_SECONDS = {900: "PT15M", 1800: "PT30M", 3600: "PT60M"}
 
-# Earliest delivery day the NL series covers.
+# Earliest delivery day the NL series covers; zones that start later (DE-LU from
+# 2018-10-01) simply come back empty for the earlier chunks.
 ARCHIVE_START = date(2015, 1, 1)
 
 
@@ -85,7 +86,7 @@ def parse_price_series(payload: dict, zone: str, retrieved_at: datetime) -> pl.D
         frame.select(
             source=pl.lit(SOURCE),
             bidding_zone=pl.lit(zone),
-            eic_code=pl.lit(config.ZONES.get(zone, "")),
+            eic_code=pl.lit(config.EIC_CODES.get(zone, "")),
             mtu_start_utc=start,
             mtu_end_utc=end.dt.replace_time_zone("UTC"),
             resolution=pl.col("seconds").replace_strict(RESOLUTION_BY_SECONDS),

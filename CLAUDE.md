@@ -1,6 +1,6 @@
 # energy-prices
 
-Archive of Dutch day-ahead electricity prices. See README.md for what it collects and how
+Archive of day-ahead electricity prices for NL and its neighbouring bidding zones. See README.md for what it collects and how
 to run it; this file records how to work on it.
 
 ## Changes go through a pull request

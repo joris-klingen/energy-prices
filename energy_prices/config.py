@@ -5,11 +5,38 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-# EIC codes of the bidding zones we collect. Extend this dict to widen the scope;
-# nothing else in the code is NL-specific.
+# EIC codes of the bidding zones the daily job collects. Keys double as the
+# Energy-Charts `bzn` code, so use its spelling (DE-LU, not DE_LU). Extend this dict to
+# widen the scope; nothing else in the code is NL-specific. NL plus the zones it is
+# coupled to by interconnector (DE-LU, BE, NorNed to NO2, COBRAcable to DK1) and FR as
+# the other large continental reference price. GB is left out: it left SDAC with
+# Brexit and ENTSO-E stopped publishing its prices in 2021.
 ZONES: dict[str, str] = {
     "NL": "10YNL----------L",
+    "DE-LU": "10Y1001A1001A82H",
+    "BE": "10YBE----------2",
+    "FR": "10YFR-RTE------C",
+    "DK1": "10YDK-1--------W",
+    "NO2": "10YNO-2--------T",
 }
+
+# Zones that no longer clear but whose history is worth having. Germany and Austria
+# were one zone until the split on 2018-10-01; DE-LU starts the day after. These are
+# backfilled on request (--zones DE-AT-LU) and never topped up by the daily job.
+RETIRED_ZONES: dict[str, str] = {
+    "DE-AT-LU": "10Y1001A1001A63L",
+}
+
+EIC_CODES: dict[str, str] = {**ZONES, **RETIRED_ZONES}
+
+
+def eic(zone: str) -> str:
+    try:
+        return EIC_CODES[zone]
+    except KeyError:
+        raise RuntimeError(
+            f"unknown bidding zone {zone!r}; known zones: {', '.join(EIC_CODES)}"
+        ) from None
 
 # Day-ahead prices for delivery day D are published around 12:45 CET on D-1 and are
 # final thereafter, but late corrections happen. The daily job re-fetches this many

@@ -1,8 +1,22 @@
 # energy-prices
 
-Archive of Dutch (NL bidding zone) day-ahead electricity prices in month-partitioned
-Parquet, topped up twice a day. Hourly from 2015-01-05, quarter-hourly from the EU-wide
-15-minute MTU change on 2025-10-01. `energy-prices coverage` prints what is in it.
+Archive of day-ahead electricity prices for the Dutch bidding zone and its neighbours, in
+month-partitioned Parquet, topped up twice a day. Hourly from 2015-01-05, quarter-hourly
+from the EU-wide 15-minute MTU change on 2025-10-01. `energy-prices coverage` prints what
+is in it.
+
+| Zone | Why it is here |
+| --- | --- |
+| `NL` | the subject |
+| `DE-LU` | largest coupled neighbour; from 2018-10-01 |
+| `DE-AT-LU` | the joint zone before the 2018 split; history only, backfill with `--zones DE-AT-LU` |
+| `BE` | coupled neighbour |
+| `NO2` | NorNed interconnector |
+| `DK1` | COBRAcable interconnector |
+| `FR` | the other large continental reference price |
+
+GB (BritNed) is left out: it left SDAC with Brexit and ENTSO-E stopped publishing its
+prices in 2021. Zones live in `config.ZONES`; adding one is a one-line change.
 
 ## Sources
 
@@ -37,8 +51,8 @@ energy-prices check-token                 # verify the ENTSO-E token
 ```
 
 Options: `--source {entsoe,energy-charts}` (default `entsoe`),
-`--fallback {auto,none,<source>}`, `--start`, `--end` (exclusive), `--zones`,
-`--lookback`.
+`--fallback {auto,none,<source>}`, `--start`, `--end` (exclusive), `--zones` (default:
+every active zone), `--lookback`.
 
 ## Reading the data
 
@@ -67,7 +81,7 @@ energy_prices/
   sources/       # energycharts.py (default), entsoe.py; each returns a pl.DataFrame
   store.py       # polars writes the Parquet, duckdb builds the queryable database
   cli.py
-data/day_ahead/zone=NL/YYYY-MM.parquet   # source of truth, one row per market time unit
+data/day_ahead/zone=<ZONE>/YYYY-MM.parquet   # source of truth, one row per market time unit
 data/energy_prices.duckdb                # derived, git-ignored, rebuilt on demand
 ```
 
@@ -84,13 +98,13 @@ A re-published revision replaces the earlier one, keeping the highest `revision_
 since GitHub defers scheduled workflows under load and runs on the hour were arriving
 around eight hours late. Each run fetches the last seven delivery days plus tomorrow and
 **commits any changed Parquet directly to `main`**. It also takes manual `source`,
-`fallback`, `start` and `end` inputs for a backfill.
+`fallback`, `start`, `end` and `zones` inputs for a backfill.
 
 An upstream outage is not treated as a failure: a connection error, 5xx or rate limiting
 that outlasts the retries makes `daily` warn and fall back to the other source, and the
 run still exits 0, because the seven-day lookback repairs the gap next time. A non-zero
-exit is reserved for the archive genuinely falling behind — newest delivery day more than
-two days back, or the **primary alone** going quiet for more than three days while the
+exit is reserved for the archive genuinely falling behind — newest delivery day of any one
+zone more than two days back, or the **primary alone** going quiet for more than three days while the
 fallback keeps the archive fresh — otherwise a fallback doing its job would mask a
 primary that has stopped working, and ENTSO-E answers a revoked token with the same
 opaque 500 it returns during an outage. A bad request or rejected credential still fails
