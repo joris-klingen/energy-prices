@@ -1,6 +1,7 @@
 # energy-prices
 
-Archive of day-ahead electricity prices for NL and its neighbouring bidding zones. See README.md for what it collects and how
+Archive of Dutch energy prices: day-ahead for NL and its neighbours, NL imbalance, intraday
+auctions, TTF gas and EU carbon. See README.md for what it collects and how
 to run it; this file records how to work on it.
 
 ## Changes go through a pull request
@@ -15,9 +16,12 @@ every scheduled run; that is the job doing its work, not a code change.
   frame through `validate()`, so adding a column means changing it there and nowhere else.
 - Polars owns the data path — parse, validate, merge, write. DuckDB owns querying: the
   derived `.duckdb` file and ad-hoc SQL. Keep that split.
-- A source module exposes `SOURCE`, `ARCHIVE_START`, `CHUNK_DAYS` and
+- `schema.py` declares each dataset (day-ahead, imbalance, intraday auction, commodity)
+  as a `Dataset`; the store functions take one and default to day-ahead.
+- A day-ahead source module exposes `SOURCE`, `ARCHIVE_START`, `CHUNK_DAYS` and
   `fetch_day_ahead(...) -> pl.DataFrame`, and is registered in `sources/__init__.py`.
-  The parse step is a pure function over a payload, which is what makes it testable.
+  Every other dataset is a `Collector` in `collectors.py`. Either way the parse step is a
+  pure function over a payload, which is what makes it testable.
 
 ## Upstream trouble is not a failure
 

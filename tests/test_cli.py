@@ -187,7 +187,7 @@ def test_daily_exits_zero_when_the_source_is_down_but_the_archive_is_fresh(monke
     today = datetime.now(cli.LOCAL_TZ)
     recent = (today - timedelta(hours=12)).astimezone(timezone.utc).replace(minute=0, second=0, microsecond=0)
     write_frame(price_frame(85.0, start=recent), tmp_path)
-    assert cli.main(["daily", "--zones", "NL"]) == 0
+    assert cli.main(["daily", "--zones", "NL", "--datasets", "day-ahead"]) == 0
 
 
 def test_one_quiet_zone_fails_the_run_even_when_the_others_are_fresh(monkeypatch, tmp_path):
@@ -265,7 +265,7 @@ def test_daily_fails_when_the_fallback_masks_a_dead_primary(monkeypatch, tmp_pat
     # ENTSO-E's last contribution was long ago.
     write_frame(price_frame(85.0, start=now - timedelta(days=30), source="entsoe"), tmp_path)
 
-    assert cli.main(["daily", "--source", "entsoe"]) == 1
+    assert cli.main(["daily", "--source", "entsoe", "--datasets", "day-ahead"]) == 1
 
 
 def test_the_default_source_is_entsoe():
