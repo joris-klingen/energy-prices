@@ -29,6 +29,14 @@ RETIRED_ZONES: dict[str, str] = {
 
 EIC_CODES: dict[str, str] = {**ZONES, **RETIRED_ZONES}
 
+# Zones whose A44 day-ahead document also carries a local auction (DE-LU: the EXAA
+# auction beside SDAC). Asking for classification sequence 1 narrows it to the SDAC price.
+# The ENTSO-E parser refuses a document that prices one interval twice, so a zone that
+# starts doing this shows up as a loud failure, not a silently wrong series.
+DAY_AHEAD_SEQUENCE: dict[str, int] = {
+    "DE-LU": 1,
+}
+
 # Imbalance prices are collected for the Dutch control area only.
 IMBALANCE_ZONES: list[str] = ["NL"]
 

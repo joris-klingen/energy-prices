@@ -34,3 +34,44 @@ def test_variable_sized_curve_carries_price_forward_over_skipped_positions():
 
 def test_acknowledgement_document_yields_no_rows():
     assert _parse("acknowledgement.xml").is_empty()
+
+
+def _with_second_series(price: str) -> str:
+    """The fixture plus a copy of its first series at a different price."""
+    xml = (FIXTURES / "a44_nl.xml").read_text()
+    start = xml.index("<TimeSeries>")
+    end = xml.index("</TimeSeries>", start) + len("</TimeSeries>")
+    copy = xml[start:end].replace("<price.amount>85.12</price.amount>", f"<price.amount>{price}</price.amount>")
+    return xml[:end] + copy + xml[end:]
+
+
+def test_a_repeated_identical_series_is_stored_once():
+    frame = parse_price_document(_with_second_series("85.12"), "NL", NOW)
+    assert frame.height == parse_price_document((FIXTURES / "a44_nl.xml").read_text(), "NL", NOW).height
+
+
+def test_two_different_prices_for_one_interval_fail_loudly():
+    import pytest
+
+    with pytest.raises(ValueError, match="conflicting prices"):
+        parse_price_document(_with_second_series("99.99"), "NL", NOW)
+
+
+def test_de_lu_asks_for_the_sdac_sequence(monkeypatch):
+    from datetime import datetime, timezone
+
+    from energy_prices.sources import entsoe
+
+    sent = {}
+
+    def fake_request(params, *args, **kwargs):
+        sent.update(params)
+        return None
+
+    monkeypatch.setattr(entsoe, "request", fake_request)
+    start = datetime(2026, 11, 1, 23, tzinfo=timezone.utc)
+    entsoe.fetch_day_ahead("DE-LU", start, start, "token")
+    assert sent["classificationSequence_AttributeInstanceComponent.position"] == 1
+    sent.clear()
+    entsoe.fetch_day_ahead("NL", start, start, "token")
+    assert "classificationSequence_AttributeInstanceComponent.position" not in sent

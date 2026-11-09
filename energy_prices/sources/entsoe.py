@@ -19,7 +19,7 @@ import requests
 
 from .. import config
 from ..errors import SourceUnavailable
-from ..schema import IMBALANCE, SCHEMA, empty_frame, validate
+from ..schema import IMBALANCE, KEY, SCHEMA, empty_frame, validate
 
 log = logging.getLogger(__name__)
 
@@ -138,7 +138,36 @@ def parse_price_document(xml: str, zone: str, retrieved_at: datetime) -> pl.Data
                     )
     if not rows:
         return empty_frame()
-    return validate(pl.DataFrame(rows, schema=SCHEMA))
+    frame = pl.DataFrame(rows, schema=SCHEMA)
+    _refuse_conflicting_prices(frame, zone)
+    return validate(frame.unique(subset=KEY, keep="first", maintain_order=True))
+
+
+# Two series priced to the cent are the same series; anything further apart is not.
+PRICE_TOLERANCE = 0.005
+
+
+def _refuse_conflicting_prices(frame: pl.DataFrame, zone: str) -> None:
+    """Fail when one document prices the same interval twice, differently.
+
+    Some zones publish more than one auction under A44 - DE-LU carries the SDAC price and
+    a local auction side by side - and the store keeps one row per interval, so which one
+    survived would be an accident. Repeats of an identical price are harmless; differing
+    ones mean the request needs narrowing (see config.DAY_AHEAD_SEQUENCE).
+    """
+    spread = (
+        frame.group_by(KEY)
+        .agg((pl.max("price_eur_mwh") - pl.min("price_eur_mwh")).alias("spread"))
+        .filter(pl.col("spread") > PRICE_TOLERANCE)
+    )
+    if not spread.is_empty():
+        first = spread.sort("mtu_start_utc").row(0, named=True)
+        raise ValueError(
+            f"ENTSO-E returned {spread.height} {zone} intervals with conflicting prices "
+            f"(first at {first['mtu_start_utc']}, spread {first['spread']:.2f} EUR/MWh); "
+            f"the zone publishes several auctions - set its classification sequence in "
+            f"config.DAY_AHEAD_SEQUENCE"
+        )
 
 
 def request(
@@ -211,6 +240,10 @@ def fetch_day_ahead(
         "out_Domain": eic,
         **_window(start, end),
     }
+    if zone in config.DAY_AHEAD_SEQUENCE:
+        params["classificationSequence_AttributeInstanceComponent.position"] = (
+            config.DAY_AHEAD_SEQUENCE[zone]
+        )
     response = request(params, token, session, max_retries)
     if response is None:
         log.info("no matching data for %s %s..%s", zone, start, end)
