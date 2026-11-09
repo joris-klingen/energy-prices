@@ -32,10 +32,6 @@ EIC_CODES: dict[str, str] = {**ZONES, **RETIRED_ZONES}
 # Imbalance prices are collected for the Dutch control area only.
 IMBALANCE_ZONES: list[str] = ["NL"]
 
-# Intraday auction prices are asked for in every active zone; zones that do not publish
-# them on the ENTSO-E platform just come back empty.
-INTRADAY_AUCTION_ZONES: list[str] = list(ZONES)
-
 
 def eic(zone: str) -> str:
     try:

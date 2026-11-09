@@ -33,7 +33,7 @@ on:
         description: "Space-separated bidding zones (blank = every active zone)"
         required: false
       datasets:
-        description: "Space-separated datasets: day-ahead imbalance intraday-auction gas carbon (blank = all)"
+        description: "Space-separated datasets: day-ahead imbalance gas carbon (blank = all)"
         required: false
 
 concurrency:

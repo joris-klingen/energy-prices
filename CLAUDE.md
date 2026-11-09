@@ -1,7 +1,7 @@
 # energy-prices
 
-Archive of Dutch energy prices: day-ahead for NL and its neighbours, NL imbalance, intraday
-auctions, TTF gas and EU carbon. See README.md for what it collects and how
+Archive of Dutch energy prices: day-ahead for NL and its neighbours, NL imbalance, TTF gas
+and EU carbon. See README.md for what it collects and how
 to run it; this file records how to work on it.
 
 ## Changes go through a pull request
@@ -16,7 +16,7 @@ every scheduled run; that is the job doing its work, not a code change.
   frame through `validate()`, so adding a column means changing it there and nowhere else.
 - Polars owns the data path — parse, validate, merge, write. DuckDB owns querying: the
   derived `.duckdb` file and ad-hoc SQL. Keep that split.
-- `schema.py` declares each dataset (day-ahead, imbalance, intraday auction, commodity)
+- `schema.py` declares each dataset (day-ahead, imbalance, commodity)
   as a `Dataset`; the store functions take one and default to day-ahead.
 - A day-ahead source module exposes `SOURCE`, `ARCHIVE_START`, `CHUNK_DAYS` and
   `fetch_day_ahead(...) -> pl.DataFrame`, and is registered in `sources/__init__.py`.

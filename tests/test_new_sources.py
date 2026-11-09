@@ -9,7 +9,7 @@ import pytest
 from conftest import NOW
 from energy_prices import cli, collectors, store
 from energy_prices.errors import SourceUnavailable
-from energy_prices.schema import COMMODITY, IMBALANCE, INTRADAY_AUCTION, empty_frame
+from energy_prices.schema import COMMODITY, IMBALANCE, empty_frame
 from energy_prices.sources import eex_auctions, entsoe, worldbank
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -56,16 +56,6 @@ def test_imbalance_rows_with_different_price_types_are_both_stored(tmp_path):
     store.write_frame(_imbalance(), tmp_path, IMBALANCE)
     stored = pl.read_parquet(store.partition_path("NL", "2026-11", tmp_path, IMBALANCE))
     assert stored.height == 8
-
-
-# --- ENTSO-E intraday auctions -----------------------------------------------
-
-def test_intraday_auction_rows_carry_the_auction():
-    day_ahead = entsoe.parse_price_document((FIXTURES / "a44_nl.xml").read_text(), "NL", NOW)
-    frame = entsoe.label_auction(day_ahead, "IDA2")
-    assert frame.columns == INTRADAY_AUCTION.columns
-    assert set(frame["auction"]) == {"IDA2"}
-    assert frame.height == day_ahead.height
 
 
 # --- World Bank TTF ------------------------------------------------------------

@@ -7,7 +7,6 @@ Archive of Dutch energy prices in partitioned Parquet, topped up twice a day.
 | --- | --- | --- | --- | --- |
 | `day-ahead` | SDAC day-ahead electricity, NL and neighbours | ENTSO-E, Energy-Charts | 2015-01-05 | hourly; 15 min from 2025-10-01 |
 | `imbalance` | NL imbalance settlement prices, long and short | ENTSO-E (A85) | 2015 | 15 min |
-| `intraday-auction` | SIDC intraday auctions IDA1-3 | ENTSO-E (A44/A07) | 2024-06-13 | 15 min |
 | `gas` | Dutch TTF natural gas, monthly average, USD/mmbtu | World Bank Pink Sheet | 2015-04 | monthly |
 | `carbon` | EU ETS allowances (EUA, aviation EUAA), auction clearing price, EUR/tCO2 | EEX | 2012-01 | per auction, ~4 a week |
 
@@ -55,9 +54,10 @@ Day-ahead prices need no slow accumulation — ENTSO-E is the official EU archiv
   until about mid next month, so the daily run re-fetches 45 days. TenneT's own API has
   more detail (regulation state, dispatch prices) but its terms forbid sharing the data,
   so it cannot feed a public archive.
-- **Intraday auctions** are the IDA1-3 clearing prices, the A44 price document with the
-  intraday contract type. Intraday *continuous* prices (EPEX ID1/ID3/IDFull) are not
-  available: no free source publishes them, EPEX blocks scripts and licenses the history.
+- **Intraday prices are not collected.** ENTSO-E answers "no matching data" for the
+  SIDC intraday auctions (IDA1-3) in every zone here, Energy-Charts has none, and the
+  continuous indices (EPEX ID1/ID3/IDFull) are licensed — EPEX blocks scripts and sells
+  the history. There is no free source to archive.
 - **Gas** is monthly because there is no free daily TTF series that may be archived —
   ICE Endex and EEX license their settlements, and the free mirrors (Yahoo and the like)
   forbid redistribution. The World Bank's "Natural gas, Europe" column is TTF from April
@@ -81,7 +81,7 @@ energy-prices build-db                    # rebuild the DuckDB file
 energy-prices check-token                 # verify the ENTSO-E token
 ```
 
-Options: `--datasets` (default: all five), `--source {entsoe,energy-charts}` (day-ahead
+Options: `--datasets` (default: all four), `--source {entsoe,energy-charts}` (day-ahead
 only, default `entsoe`),
 `--fallback {auto,none,<source>}`, `--start`, `--end` (exclusive), `--zones` (default:
 every active zone), `--lookback`.
@@ -97,10 +97,10 @@ prices = pl.read_parquet("data/day_ahead/*/*.parquet").filter(
 ```
 
 Each dataset lives in its own folder: `data/imbalance/zone=NL/YYYY-MM.parquet`,
-`data/intraday_auction/zone=<ZONE>/YYYY-MM.parquet`, and gas and carbon together in
+and gas and carbon together in
 `data/commodity/product=<TTF|EUA|EUAA>/YYYY.parquet`, one row per product, contract and
 `trade_date`. `build-db` turns each into a table (`imbalance_prices`,
-`intraday_auction_prices`, `commodity_prices`).
+`commodity_prices`).
 
 ```r
 library(duckdb); library(data.table)
@@ -140,7 +140,7 @@ around eight hours late. Each run fetches the last seven delivery days plus tomo
 `fallback`, `start`, `end` and `zones` inputs for a backfill.
 
 The other datasets follow the same rule with their own allowance (imbalance 4 days,
-intraday auctions 3, carbon 25 to ride out the Christmas pause, gas 100), and are checked
+carbon 25 to ride out the Christmas pause, gas 100), and are checked
 on every run, not only after an outage: a scraped page whose layout changed can keep
 answering 200 with nothing new, and only the age of the newest row would show it.
 

@@ -17,7 +17,7 @@ from zoneinfo import ZoneInfo
 import polars as pl
 
 from . import config
-from .schema import COMMODITY, IMBALANCE, INTRADAY_AUCTION, Dataset, empty_frame
+from .schema import COMMODITY, IMBALANCE, Dataset, empty_frame
 from .sources import eex_auctions, entsoe, worldbank
 
 log = logging.getLogger(__name__)
@@ -62,17 +62,6 @@ def _imbalance(start: date, end: date) -> pl.DataFrame:
     )
 
 
-def _intraday_auctions(start: date, end: date) -> pl.DataFrame:
-    return _concat(
-        [
-            entsoe.fetch_intraday_auction(zone, auction, _utc_midnight(start), _utc_midnight(end))
-            for zone in config.INTRADAY_AUCTION_ZONES
-            for auction in entsoe.INTRADAY_AUCTIONS
-        ],
-        INTRADAY_AUCTION,
-    )
-
-
 COLLECTORS: dict[str, Collector] = {
     collector.name: collector
     for collector in [
@@ -88,18 +77,6 @@ COLLECTORS: dict[str, Collector] = {
             stale_after_days=4,
             chunk_days=365,
             fetch=_imbalance,
-            needs_entsoe_token=True,
-        ),
-        Collector(
-            name="intraday-auction",
-            dataset=INTRADAY_AUCTION,
-            source=entsoe.SOURCE,
-            description="SIDC intraday auction prices IDA1-3 (ENTSO-E A44/A07)",
-            archive_start=date(2024, 6, 13),
-            lookback_days=7,
-            stale_after_days=3,
-            chunk_days=365,
-            fetch=_intraday_auctions,
             needs_entsoe_token=True,
         ),
         Collector(

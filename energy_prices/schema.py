@@ -84,20 +84,6 @@ def register(dataset: Dataset) -> Dataset:
     return dataset
 
 
-# Clearing prices of the pan-European intraday auctions (SIDC IDA1-3, since 2024-06-13):
-# the day-ahead row shape plus which of the three auctions cleared the price.
-INTRADAY_AUCTION = register(
-    Dataset(
-        name="intraday_auction",
-        schema={**DAY_AHEAD.schema, "auction": pl.Utf8},
-        key=("source", "bidding_zone", "mtu_start_utc", "resolution", "auction"),
-        time_column="mtu_start_utc",
-        partition_by="bidding_zone",
-        partition_label="zone",
-        coverage_by=("auction", "resolution"),
-    )
-)
-
 # Imbalance (settlement) prices: what a balance responsible party pays or receives for
 # its deviation in each imbalance settlement period. A period can carry more than one
 # price - the Dutch scheme has separate prices for a short and a long position when

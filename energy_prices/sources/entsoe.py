@@ -1,5 +1,5 @@
-"""Thin client for the ENTSO-E Transparency Platform: day-ahead and intraday-auction
-prices (A44) and imbalance prices (A85).
+"""Thin client for the ENTSO-E Transparency Platform: day-ahead prices (A44) and
+imbalance prices (A85).
 
 The XML is parsed namespace-agnostically (ENTSO-E bumps the schema version from time
 to time) and expanded into one row per market time unit.
@@ -19,7 +19,7 @@ import requests
 
 from .. import config
 from ..errors import SourceUnavailable
-from ..schema import IMBALANCE, INTRADAY_AUCTION, SCHEMA, empty_frame, validate
+from ..schema import IMBALANCE, SCHEMA, empty_frame, validate
 
 log = logging.getLogger(__name__)
 
@@ -216,47 +216,6 @@ def fetch_day_ahead(
         log.info("no matching data for %s %s..%s", zone, start, end)
         return empty_frame()
     return parse_price_document(response.text, zone, datetime.now(timezone.utc))
-
-
-# --- intraday auctions (SIDC IDA1-3, since 2024-06-13) ------------------------
-#
-# Same A44 price document as day-ahead, asked for with the intraday contract type and
-# the auction's sequence number. Only some zones publish them on the platform; a zone
-# that does not simply answers "No matching data".
-
-INTRADAY_CONTRACT_TYPE = "A07"
-INTRADAY_AUCTIONS = {"IDA1": 1, "IDA2": 2, "IDA3": 3}
-
-
-def label_auction(frame: pl.DataFrame, auction: str) -> pl.DataFrame:
-    return validate(frame.with_columns(auction=pl.lit(auction)), INTRADAY_AUCTION)
-
-
-def fetch_intraday_auction(
-    zone: str,
-    auction: str,
-    start: datetime,
-    end: datetime,
-    token: str | None = None,
-    session: requests.Session | None = None,
-    max_retries: int = 4,
-) -> pl.DataFrame:
-    """Clearing prices of one intraday auction for [start, end) in UTC."""
-    eic = config.eic(zone)
-    params = {
-        "documentType": DOCUMENT_TYPE,
-        "contract_MarketAgreement.type": INTRADAY_CONTRACT_TYPE,
-        "classificationSequence_AttributeInstanceComponent.position": INTRADAY_AUCTIONS[auction],
-        "in_Domain": eic,
-        "out_Domain": eic,
-        **_window(start, end),
-    }
-    response = request(params, token, session, max_retries)
-    if response is None:
-        log.info("no %s data for %s %s..%s", auction, zone, start, end)
-        return empty_frame(INTRADAY_AUCTION)
-    frame = parse_price_document(response.text, zone, datetime.now(timezone.utc))
-    return label_auction(frame, auction)
 
 
 # --- imbalance prices (A85, transparency item 17.1.G) ------------------------
