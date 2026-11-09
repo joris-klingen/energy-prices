@@ -1,8 +1,32 @@
 # energy-prices
 
-Archive of Dutch (NL bidding zone) day-ahead electricity prices in month-partitioned
-Parquet, topped up twice a day. Hourly from 2015-01-05, quarter-hourly from the EU-wide
-15-minute MTU change on 2025-10-01. `energy-prices coverage` prints what is in it.
+Archive of Dutch energy prices in partitioned Parquet, topped up twice a day.
+`energy-prices coverage` prints what is in it.
+
+| Dataset (`--datasets`) | What | Source | From | Resolution |
+| --- | --- | --- | --- | --- |
+| `day-ahead` | SDAC day-ahead electricity, NL and neighbours | ENTSO-E, Energy-Charts | 2015-01-05 | hourly; 15 min from 2025-10-01 |
+| `imbalance` | NL imbalance settlement prices, long and short | ENTSO-E (A85) | 2015 | 15 min |
+| `gas` | Dutch TTF natural gas, monthly average, USD/mmbtu | World Bank Pink Sheet | 2015-04 | monthly |
+| `carbon` | EU ETS allowances (EUA, aviation EUAA), auction clearing price, EUR/tCO2 | EEX | 2012-01 | per auction, ~4 a week |
+
+### Day-ahead zones
+
+Hourly from 2015-01-05, quarter-hourly from the EU-wide 15-minute MTU change on
+2025-10-01.
+
+| Zone | Why it is here |
+| --- | --- |
+| `NL` | the subject |
+| `DE-LU` | largest coupled neighbour; from 2018-10-01 |
+| `DE-AT-LU` | the joint zone before the 2018 split; history only, backfill with `--zones DE-AT-LU` |
+| `BE` | coupled neighbour |
+| `NO2` | NorNed interconnector |
+| `DK1` | COBRAcable interconnector |
+| `FR` | the other large continental reference price |
+
+GB (BritNed) is left out: it left SDAC with Brexit and ENTSO-E stopped publishing its
+prices in 2021. Zones live in `config.ZONES`; adding one is a one-line change.
 
 ## Sources
 
@@ -20,9 +44,30 @@ of leaving it to be inferred from the spacing between timestamps. Energy-Charts 
 credential, so `--source energy-charts` is the route to collect without one.
 
 Day-ahead prices need no slow accumulation — ENTSO-E is the official EU archive back to
-2015, so `backfill` fetches the lot in one run. Intraday *continuous* prices (EPEX
-ID1/ID3/IDFull) are the opposite case: only the last few days are public and the history
-is sold, so those can only be harvested from the day you start.
+2015, so `backfill` fetches the lot in one run.
+
+### The other datasets, and what is deliberately missing
+
+- **Imbalance** comes from ENTSO-E A85 for the Dutch control area. Every quarter-hour has
+  a `long` and a `short` price (`price_type`); they differ only when TenneT activated
+  balancing energy in both directions. TenneT publishes a day the next morning and revises
+  until about mid next month, so the daily run re-fetches 45 days. TenneT's own API has
+  more detail (regulation state, dispatch prices) but its terms forbid sharing the data,
+  so it cannot feed a public archive.
+- **Intraday prices are not collected.** ENTSO-E answers "no matching data" for the
+  SIDC intraday auctions (IDA1-3) in every zone here, Energy-Charts has none, and the
+  continuous indices (EPEX ID1/ID3/IDFull) are licensed — EPEX blocks scripts and sells
+  the history. There is no free source to archive.
+- **Gas** is monthly because there is no free daily TTF series that may be archived —
+  ICE Endex and EEX license their settlements, and the free mirrors (Yahoo and the like)
+  forbid redistribution. The World Bank's "Natural gas, Europe" column is TTF from April
+  2015 (a border-price blend before that, so the archive starts there), in USD/mmbtu,
+  published around the 3rd of each month. FRED's `PNGASEUUSDM` (IMF) tracks it to within
+  a few cents and is a handy cross-check.
+- **Carbon** is the primary-auction clearing price from EEX, the EU ETS common auction
+  platform, not the secondary-market (futures) price, which is licensed. `contract` says
+  who auctioned it (`primary-auction-EU`, `-DE`, `-PL`, `-NIR`, ...), `product` whether
+  it was a general (`EUA`) or aviation (`EUAA`) allowance. Cancelled auctions are dropped.
 
 ## Use
 
@@ -36,9 +81,10 @@ energy-prices build-db                    # rebuild the DuckDB file
 energy-prices check-token                 # verify the ENTSO-E token
 ```
 
-Options: `--source {entsoe,energy-charts}` (default `entsoe`),
-`--fallback {auto,none,<source>}`, `--start`, `--end` (exclusive), `--zones`,
-`--lookback`.
+Options: `--datasets` (default: all four), `--source {entsoe,energy-charts}` (day-ahead
+only, default `entsoe`),
+`--fallback {auto,none,<source>}`, `--start`, `--end` (exclusive), `--zones` (default:
+every active zone), `--lookback`.
 
 ## Reading the data
 
@@ -49,6 +95,12 @@ prices = pl.read_parquet("data/day_ahead/*/*.parquet").filter(
     (pl.col("bidding_zone") == "NL") & (pl.col("source") == "energy-charts")
 )
 ```
+
+Each dataset lives in its own folder: `data/imbalance/zone=NL/YYYY-MM.parquet`,
+and gas and carbon together in
+`data/commodity/product=<TTF|EUA|EUAA>/YYYY.parquet`, one row per product, contract and
+`trade_date`. `build-db` turns each into a table (`imbalance_prices`,
+`commodity_prices`).
 
 ```r
 library(duckdb); library(data.table)
@@ -63,11 +115,12 @@ prices <- setDT(dbGetQuery(dbConnect(duckdb()), "
 
 ```
 energy_prices/
-  schema.py      # the row schema and dedupe key, declared once
-  sources/       # energycharts.py (default), entsoe.py; each returns a pl.DataFrame
+  schema.py      # each dataset's row schema, dedupe key and partitioning, declared once
+  collectors.py  # the non-day-ahead datasets: start, lookback, staleness allowance
+  sources/       # entsoe.py, energycharts.py, worldbank.py, eex_auctions.py
   store.py       # polars writes the Parquet, duckdb builds the queryable database
   cli.py
-data/day_ahead/zone=NL/YYYY-MM.parquet   # source of truth, one row per market time unit
+data/day_ahead/zone=<ZONE>/YYYY-MM.parquet   # source of truth, one row per market time unit
 data/energy_prices.duckdb                # derived, git-ignored, rebuilt on demand
 ```
 
@@ -84,13 +137,18 @@ A re-published revision replaces the earlier one, keeping the highest `revision_
 since GitHub defers scheduled workflows under load and runs on the hour were arriving
 around eight hours late. Each run fetches the last seven delivery days plus tomorrow and
 **commits any changed Parquet directly to `main`**. It also takes manual `source`,
-`fallback`, `start` and `end` inputs for a backfill.
+`fallback`, `start`, `end` and `zones` inputs for a backfill.
+
+The other datasets follow the same rule with their own allowance (imbalance 4 days,
+carbon 25 to ride out the Christmas pause, gas 100), and are checked
+on every run, not only after an outage: a scraped page whose layout changed can keep
+answering 200 with nothing new, and only the age of the newest row would show it.
 
 An upstream outage is not treated as a failure: a connection error, 5xx or rate limiting
 that outlasts the retries makes `daily` warn and fall back to the other source, and the
 run still exits 0, because the seven-day lookback repairs the gap next time. A non-zero
-exit is reserved for the archive genuinely falling behind — newest delivery day more than
-two days back, or the **primary alone** going quiet for more than three days while the
+exit is reserved for the archive genuinely falling behind — newest delivery day of any one
+zone more than two days back, or the **primary alone** going quiet for more than three days while the
 fallback keeps the archive fresh — otherwise a fallback doing its job would mask a
 primary that has stopped working, and ENTSO-E answers a revoked token with the same
 opaque 500 it returns during an outage. A bad request or rejected credential still fails
@@ -116,9 +174,17 @@ what a real outage returns, so `check-token` cannot tell you which it is.
 ## Licence and attribution
 
 Energy-Charts data is CC BY 4.0, credited to *Bundesnetzagentur | SMARD.de* in every
-response's `license_info`. ENTSO-E data is free to use under its
-[terms of use](https://transparency.entsoe.eu/content/static_content/Static%20content/terms%20and%20conditions/terms%20and%20conditions.html).
-Credit the publisher you pulled from and ENTSO-E as the origin.
+response's `license_info` — but only for the zones SMARD republishes (all the active
+zones here); other Energy-Charts zones are for private use only. ENTSO-E data is free to
+use under its
+[terms of use](https://transparency.entsoe.eu/content/static_content/Static%20content/terms%20and%20conditions/terms%20and%20conditions.html);
+the TSO data among it, imbalance prices included, is open data. Credit the publisher you
+pulled from and ENTSO-E as the origin.
+
+The World Bank Pink Sheet is CC BY 4.0 (*World Bank Commodity Price Data*). The EEX
+auction results are regulatory disclosures the auction platform must publish; they carry
+no explicit open licence, so credit EEX and check its terms before redistributing them
+beyond research use.
 
 ## Contributing
 

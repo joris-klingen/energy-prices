@@ -1,4 +1,4 @@
-name: collect day-ahead prices
+name: collect prices
 
 on:
   schedule:
@@ -29,6 +29,12 @@ on:
       end:
         description: "Exclusive last delivery day (YYYY-MM-DD)"
         required: false
+      zones:
+        description: "Space-separated bidding zones (blank = every active zone)"
+        required: false
+      datasets:
+        description: "Space-separated datasets: day-ahead imbalance gas carbon (blank = all)"
+        required: false
 
 concurrency:
   group: collect
@@ -56,12 +62,15 @@ jobs:
         run: |
           SOURCE="${{ inputs.source || 'entsoe' }}"
           FALLBACK="${{ inputs.fallback || 'auto' }}"
+          EXTRA_ARGS=()
+          if [ -n "${{ inputs.zones }}" ]; then EXTRA_ARGS=(--zones ${{ inputs.zones }}); fi
+          if [ -n "${{ inputs.datasets }}" ]; then EXTRA_ARGS+=(--datasets ${{ inputs.datasets }}); fi
           if [ -n "${{ inputs.start }}" ]; then
-            energy-prices backfill --source "$SOURCE" --fallback "$FALLBACK" \
+            energy-prices backfill --source "$SOURCE" --fallback "$FALLBACK" "${EXTRA_ARGS[@]}" \
               --start "${{ inputs.start }}" \
               ${{ inputs.end && format('--end {0}', inputs.end) || '' }}
           else
-            energy-prices daily --source "$SOURCE" --fallback "$FALLBACK"
+            energy-prices daily --source "$SOURCE" --fallback "$FALLBACK" "${EXTRA_ARGS[@]}"
           fi
 
       - name: Commit new prices
@@ -72,7 +81,7 @@ jobs:
           if git diff --cached --quiet; then
             echo "no new prices"
           else
-            git commit -m "data: day-ahead prices as of $(date -u +%Y-%m-%dT%H:%MZ)"
+            git commit -m "data: prices as of $(date -u +%Y-%m-%dT%H:%MZ)"
             for attempt in 1 2 3 4; do
               git pull --rebase origin "${GITHUB_REF_NAME}" && git push origin "HEAD:${GITHUB_REF_NAME}" && break
               sleep $((2 ** attempt))

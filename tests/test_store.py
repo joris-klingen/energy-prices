@@ -1,3 +1,4 @@
+from pathlib import Path
 from datetime import datetime, timedelta, timezone
 
 import polars as pl
@@ -46,7 +47,7 @@ def test_two_sources_can_cover_the_same_interval(tmp_path):
 def test_rows_spanning_a_month_boundary_land_in_separate_partitions(tmp_path):
     frame = price_frame(1.0, 2.0, start=datetime(2026, 9, 30, 23, 0, tzinfo=timezone.utc))
     written = write_frame(frame, tmp_path)
-    assert sorted(p.rsplit("/", 1)[-1] for p in written) == ["2026-09.parquet", "2026-10.parquet"]
+    assert sorted(Path(p).name for p in written) == ["2026-09.parquet", "2026-10.parquet"]
 
 
 def test_an_empty_frame_writes_nothing(tmp_path):
@@ -76,3 +77,70 @@ def test_build_duckdb_adds_local_time_column(tmp_path):
     # 22:00 UTC in September is midnight in Amsterdam (CEST).
     assert row[0] == datetime(2026, 9, 10, 0, 0)
     assert row[1] == 85.0
+
+
+# --- datasets other than day-ahead -------------------------------------------
+
+def _commodity_frame(*prices: float, start, contract: str = "day-ahead", revision: int = 0):
+    from datetime import timedelta as td
+
+    from energy_prices.schema import COMMODITY, validate
+
+    rows = [
+        {
+            "source": "test", "product": "TTF", "contract": contract,
+            "trade_date": start + td(days=index), "price": price, "currency": "EUR",
+            "unit": "MWH", "source_reference": "", "revision_number": revision,
+            "retrieved_at_utc": START,
+        }
+        for index, price in enumerate(prices)
+    ]
+    return validate(pl.DataFrame(rows), COMMODITY)
+
+
+def test_commodity_rows_are_partitioned_by_product_and_year(tmp_path):
+    from datetime import date
+
+    from energy_prices.schema import COMMODITY
+
+    frame = _commodity_frame(30.0, 31.0, start=date(2025, 12, 31))
+    written = write_frame(frame, tmp_path, COMMODITY)
+    assert sorted(Path(p).relative_to(tmp_path).as_posix() for p in written) == [
+        "commodity/product=TTF/2025.parquet",
+        "commodity/product=TTF/2026.parquet",
+    ]
+
+
+def test_commodity_contracts_on_the_same_day_are_kept_apart(tmp_path):
+    from datetime import date
+
+    from energy_prices.schema import COMMODITY
+
+    day = date(2026, 3, 2)
+    write_frame(_commodity_frame(30.0, start=day), tmp_path, COMMODITY)
+    write_frame(_commodity_frame(32.5, start=day, contract="front-month"), tmp_path, COMMODITY)
+    write_frame(_commodity_frame(30.4, start=day, revision=1), tmp_path, COMMODITY)
+    stored = pl.read_parquet(partition_path("TTF", "2026", tmp_path, COMMODITY))
+    assert sorted(zip(stored["contract"], stored["price"])) == [
+        ("day-ahead", 30.4), ("front-month", 32.5)
+    ]
+    assert coverage(tmp_path, COMMODITY) == [
+        ("test", "TTF", "day-ahead", 1, "2026-03-02", "2026-03-02"),
+        ("test", "TTF", "front-month", 1, "2026-03-02", "2026-03-02"),
+    ]
+
+
+def test_build_duckdb_includes_every_dataset_present(tmp_path):
+    from datetime import date
+
+    import duckdb
+
+    from energy_prices.schema import COMMODITY
+
+    write_frame(price_frame(85.0, start=START), tmp_path)
+    write_frame(_commodity_frame(30.0, start=date(2026, 3, 2)), tmp_path, COMMODITY)
+    db = build_duckdb(tmp_path / "prices.duckdb", tmp_path)
+    con = duckdb.connect(str(db))
+    tables = {row[0] for row in con.execute("SHOW TABLES").fetchall()}
+    assert {"day_ahead_prices", "commodity_prices"} <= tables
+    assert "imbalance_prices" not in tables  # nothing stored, so no empty table

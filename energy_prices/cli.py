@@ -12,6 +12,7 @@ import polars as pl
 import requests
 
 from . import config, store
+from .collectors import COLLECTORS, Collector
 from .errors import SourceUnavailable
 from .sources import DEFAULT, SOURCES, entsoe
 
@@ -22,6 +23,9 @@ LOCAL_TZ = ZoneInfo("Europe/Amsterdam")
 # A healthy archive reaches tomorrow, so this leaves roughly three days of slack for
 # an upstream outage to clear on its own before anyone needs to be told.
 STALE_AFTER_DAYS = 2
+
+DAY_AHEAD = "day-ahead"
+DATASET_CHOICES = [DAY_AHEAD, *COLLECTORS]
 
 # How long the primary source may produce nothing before that is a problem in its own
 # right. The fallback keeps the archive fresh, which would otherwise mask a primary
@@ -127,6 +131,78 @@ def check_token() -> int:
 def _summary() -> None:
     for source, zone, resolution, rows, first, last in store.coverage():
         log.info("coverage %s %s %s: %s rows, %s .. %s", source, zone, resolution, rows, first, last)
+    seen = set()
+    for collector in COLLECTORS.values():
+        if collector.dataset.name in seen:
+            continue
+        seen.add(collector.dataset.name)
+        for row in store.coverage(dataset=collector.dataset):
+            *labels, rows, first, last = row
+            log.info("coverage %s %s: %s rows, %s .. %s",
+                     collector.dataset.name, " ".join(map(str, labels)), rows, first, last)
+
+
+def run_collector(
+    collector: Collector, command: str, start: date | None, end: date | None, today: date
+) -> int:
+    """Backfill or top up one non-day-ahead dataset. Returns an exit code.
+
+    Mirrors the day-ahead rules: an outage only warns while the dataset is still within
+    its staleness allowance, an incomplete backfill fails, a bad request fails loudly.
+    """
+    if collector.needs_entsoe_token and not config.has_api_token():
+        log.warning("skipping %s: no ENTSO-E token configured", collector.name)
+        return 0
+
+    if command == "backfill":
+        start = start or collector.archive_start
+    else:
+        start = start or today - timedelta(days=collector.lookback_days)
+    end = end or today + timedelta(days=2)
+
+    degraded = False
+    cursor = start
+    while cursor < end:
+        chunk_end = min(cursor + timedelta(days=collector.chunk_days), end)
+        log.info("fetching %s %s..%s", collector.name, cursor, chunk_end)
+        try:
+            frame = collector.fetch(cursor, chunk_end)
+        except SourceUnavailable as exc:
+            log.warning("  %s is unavailable: %s", collector.source, exc)
+            degraded = True
+            break
+        log.info("  %s rows", frame.height)
+        for path, rows in store.write_frame(frame, dataset=collector.dataset).items():
+            log.info("  %s -> %s rows", path, rows)
+        cursor = chunk_end
+
+    if command == "backfill":
+        if degraded:
+            log.error("%s backfill incomplete: the source went unavailable", collector.name)
+            return 1
+        return 0
+    return report_collector_staleness(collector, today)
+
+
+def report_collector_staleness(collector: Collector, today: date) -> int:
+    """Fail when a dataset's newest row is older than its allowance, outage or not.
+
+    Checked on every daily run rather than only after an outage: a scrape whose page
+    layout changed can keep answering 200 with nothing new, and only the age of the
+    newest row would ever show it.
+    """
+    newest = store.newest_day(dataset=collector.dataset, source=collector.source)
+    if newest is None:
+        log.error("%s has never produced a row in this archive", collector.name)
+        return 1
+    behind = (today - newest).days
+    if behind > collector.stale_after_days:
+        log.error(
+            "%s is stale: newest row is from %s, %s days old (allowance %s)",
+            collector.name, newest, behind, collector.stale_after_days,
+        )
+        return 1
+    return 0
 
 
 def _resolve_fallback(source: str, choice: str) -> str | None:
@@ -157,33 +233,41 @@ def collect_with_fallback(
     return rows + extra, still_degraded
 
 
-def report_staleness(today: date) -> int:
+def report_staleness(today: date, zones: list[str] | None = None) -> int:
     """Decide whether an incomplete run is worth failing over.
 
     An upstream outage is not our problem and the daily lookback repairs the gap by
     itself, so it only earns a warning. An archive that has actually fallen behind
-    does need attention, and that is what the non-zero exit is reserved for.
+    does need attention, and that is what the non-zero exit is reserved for. With
+    `zones`, each is judged on its own, so one zone going quiet cannot hide behind the
+    others staying fresh.
     """
-    newest = store.newest_delivery_day()
-    if newest is None:
-        log.error("the archive is empty and the source is unavailable")
-        return 1
+    checks = [None] if not zones else list(zones)
+    exit_code = 0
+    for zone in checks:
+        label = "the archive" if zone is None else zone
+        newest = store.newest_delivery_day(zone=zone)
+        if newest is None:
+            log.error("%s is empty and the source is unavailable", label)
+            exit_code = 1
+            continue
 
-    behind = (today - newest).days
-    if behind > STALE_AFTER_DAYS:
-        log.error(
-            "archive is stale: newest delivery day is %s, %s days behind today - "
-            "the source has been unavailable too long to shrug off",
-            newest, behind,
+        behind = (today - newest).days
+        if behind > STALE_AFTER_DAYS:
+            log.error(
+                "%s is stale: newest delivery day is %s, %s days behind today - "
+                "the source has been unavailable too long to shrug off",
+                label, newest, behind,
+            )
+            exit_code = 1
+            continue
+
+        log.warning(
+            "source unavailable, but %s is current through %s; the next run's "
+            "%s-day lookback will fill the gap",
+            label, newest, config.LOOKBACK_DAYS,
         )
-        return 1
-
-    log.warning(
-        "source unavailable, but the archive is current through %s; the next run's "
-        "%s-day lookback will fill the gap",
-        newest, config.LOOKBACK_DAYS,
-    )
-    return 0
+    return exit_code
 
 
 def report_primary_health(source: str, today: date) -> int:
@@ -228,10 +312,18 @@ def _main(argv: list[str] | None = None) -> int:
         "--fallback", choices=["auto", "none", *sorted(SOURCES)], default="auto",
         help="source to try when the primary is unavailable (default: the other one)",
     )
-    parser.add_argument("--zones", nargs="*", default=list(config.ZONES))
+    parser.add_argument(
+        "--zones", nargs="*", choices=list(config.EIC_CODES), default=list(config.ZONES),
+        metavar="ZONE", help=f"bidding zones (default: {' '.join(config.ZONES)})",
+    )
     parser.add_argument("--start", type=date.fromisoformat, help="first delivery day (backfill)")
     parser.add_argument("--end", type=date.fromisoformat, help="exclusive last delivery day")
-    parser.add_argument("--lookback", type=int, default=config.LOOKBACK_DAYS)
+    parser.add_argument("--lookback", type=int, default=config.LOOKBACK_DAYS,
+                        help="day-ahead lookback; other datasets use their own")
+    parser.add_argument(
+        "--datasets", nargs="*", choices=DATASET_CHOICES, default=DATASET_CHOICES,
+        metavar="DATASET", help=f"what to collect (default: all of {' '.join(DATASET_CHOICES)})",
+    )
     args = parser.parse_args(argv)
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s", datefmt="%H:%M:%S")
@@ -243,8 +335,10 @@ def _main(argv: list[str] | None = None) -> int:
         _summary()
         return 0
 
+    day_ahead = DAY_AHEAD in args.datasets
     degraded = False
-    if args.command in ("backfill", "daily"):
+    extra_exit = 0
+    if args.command in ("backfill", "daily") and day_ahead:
         fallback = _resolve_fallback(args.source, args.fallback)
         if args.command == "backfill":
             start = args.start or SOURCES[args.source].ARCHIVE_START
@@ -254,6 +348,11 @@ def _main(argv: list[str] | None = None) -> int:
             start = args.start or today - timedelta(days=args.lookback)
         end = args.end or today + timedelta(days=2)
         _, degraded = collect_with_fallback(args.source, fallback, args.zones, start, end)
+    if args.command in ("backfill", "daily"):
+        for name in args.datasets:
+            if name != DAY_AHEAD:
+                code = run_collector(COLLECTORS[name], args.command, args.start, args.end, today)
+                extra_exit = extra_exit or code
 
     log.info("building duckdb at %s", store.build_duckdb())
     _summary()
@@ -262,9 +361,11 @@ def _main(argv: list[str] | None = None) -> int:
         if degraded:
             log.error("backfill incomplete: the source went unavailable")
             return 1
-        return 0
+        return extra_exit
+    if args.command != "daily" or not day_ahead:
+        return extra_exit
 
     # daily: an outage is forgiven while the archive keeps up, but a primary that has
     # gone quiet for days is reported even when the fallback is covering for it.
-    exit_code = report_staleness(today) if degraded else 0
-    return exit_code or report_primary_health(args.source, today)
+    exit_code = report_staleness(today, args.zones) if degraded else 0
+    return exit_code or report_primary_health(args.source, today) or extra_exit
