@@ -1,7 +1,8 @@
 library(data.table)
 library(arrow)
 library(ggplot2)
-pkgload::load_all("../ggcpb", quiet = TRUE)
+# ggcpb: in packages/ of the research folder (since 2026-11-13), or next to this repo
+pkgload::load_all(Find(dir.exists, c("../../packages/ggcpb", "../ggcpb")), quiet = TRUE)
 
 # Rscript's default pdf device cannot draw the house font, and routing it through
 # showtext breaks the font in every figure saved after the first; a ragg device reads
